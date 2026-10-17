@@ -23,16 +23,25 @@ import {
   User,
   ChevronDown,
   KeyRound,
+  Home,
+  PlayCircle,
 } from 'lucide-react';
 
 export function Navigation() {
   const pathname = usePathname();
   const { language, setLanguage, t } = useLanguage();
   const { theme, toggleTheme } = useTheme();
-  const { user, isAdmin, logout } = useAuth();
+  const { user, isAdmin, logout, mode, exitDemo } = useAuth();
+  const hasWorkspace = mode === 'user' || mode === 'demo';
 
-  const navItems = !user ? [] : [
-    { href: '/', label: t.nav.dashboard, icon: LayoutDashboard },
+  // Guests get the features that work without an account; signing in or the demo unlocks the rest.
+  const navItems = mode === 'loading' ? [] : !hasWorkspace ? [
+    { href: '/', label: 'Home', icon: Home },
+    { href: '/assistant', label: t.nav.assistant, icon: Bot },
+    { href: '/schemes', label: t.nav.schemes, icon: ShieldCheck },
+    { href: '/complaints', label: t.nav.complaints, icon: FileText },
+  ] : [
+    { href: '/dashboard', label: t.nav.dashboard, icon: LayoutDashboard },
     { href: '/tracker', label: t.nav.tracker, icon: Wallet },
     { href: '/assistant', label: t.nav.assistant, icon: Bot },
     { href: '/schemes', label: t.nav.schemes, icon: ShieldCheck },
@@ -46,7 +55,7 @@ export function Navigation() {
       {/* Top Header */}
       <header className="sticky top-0 z-40 bg-[#0b1329]/95 backdrop-blur border-b border-slate-800/80 px-4 py-3">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2.5 group">
+          <Link href={hasWorkspace ? '/dashboard' : '/'} className="flex items-center gap-2.5 group">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20 group-hover:scale-105 transition-transform">
               <span className="text-white font-black text-xl tracking-tight">G</span>
             </div>
@@ -198,8 +207,28 @@ export function Navigation() {
         </div>
       </header>
 
+      {/* Demo mode banner: sample data must never look like a real account */}
+      {mode === 'demo' && (
+        <div className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+            <span className="text-amber-200 flex items-center gap-1.5">
+              <PlayCircle className="w-4 h-4 shrink-0" />
+              <span>{t.journey.demoBanner}</span>
+            </span>
+            <span className="flex items-center gap-3 shrink-0">
+              <Link href="/login?mode=signup" className="font-bold text-emerald-400 hover:underline">
+                {t.journey.demoSignUp}
+              </Link>
+              <button type="button" onClick={exitDemo} className="font-semibold text-slate-300 hover:text-white">
+                {t.journey.demoExit}
+              </button>
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Desktop Secondary Nav Bar */}
-      {user && (
+      {navItems.length > 0 && (
       <nav className="hidden md:block bg-[#0e172a] border-b border-slate-800/60 px-4">
         <div className="max-w-7xl mx-auto flex items-center space-x-1 py-1.5">
           {navItems.map((item) => {
@@ -226,9 +255,9 @@ export function Navigation() {
       )}
 
       {/* Mobile Bottom Navigation Bar (Thumb friendly) */}
-      {user && (
+      {navItems.length > 0 && (
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#0b1329]/95 backdrop-blur border-t border-slate-800 px-2 py-1 shadow-2xl">
-        <div className={`grid grid-cols-${navItems.length} gap-1`}>
+        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${navItems.length}, minmax(0, 1fr))` }}>
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;

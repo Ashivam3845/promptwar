@@ -8,13 +8,39 @@ import { SupportedLanguage } from '@/types';
 
 const SARVAM_BASE_URL = 'https://api.sarvam.ai';
 
+const STT_TIMEOUT_MS = 25_000;
+const TTS_TIMEOUT_MS = 20_000;
+const DOC_REQUEST_TIMEOUT_MS = 30_000;
+const DOC_POLL_INTERVAL_MS = 2_000;
+const DOC_POLL_MAX_TOTAL_MS = 30_000;
+
+/** Longest text sent for speech synthesis in one request. */
+export const MAX_TTS_CHARS = 1500;
+
+const SUPPORTED_LANGUAGES: readonly SupportedLanguage[] = ['en', 'hi', 'pa'];
+
+/** Coerces untrusted input to a supported language, falling back when it is missing or unknown. */
+export function normalizeLanguage(value: unknown, fallback: SupportedLanguage = 'en'): SupportedLanguage {
+  return typeof value === 'string' && (SUPPORTED_LANGUAGES as readonly string[]).includes(value)
+    ? (value as SupportedLanguage)
+    : fallback;
+}
+
+function isAbortOrTimeout(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+}
+
+interface SarvamErrorBody {
+  error?: { message?: string };
+  message?: string;
+}
+
+function sarvamErrorMessage(data: SarvamErrorBody | null, fallback: string): string {
+  return data?.error?.message || data?.message || fallback;
+}
+
 export function getSarvamApiKey(): string {
-  return (
-    process.env.SARVAM_API_KEY ||
-    process.env['sarvam api'] ||
-    process.env['SARVAM_API'] ||
-    ''
-  ).trim();
+  return (process.env.SARVAM_API_KEY || '').trim();
 }
 
 export function isSarvamConfigured(): boolean {
@@ -56,6 +82,12 @@ export interface SarvamTtsResult {
   contentType: string;
 }
 
+interface SarvamDocJobStatus {
+  status?: string;
+  output?: { text?: string };
+  documents?: { extracted_text?: string; text?: string }[];
+}
+
 export interface ExtractedDocumentFields {
   platformName?: string;
   incidentDate?: string;
@@ -73,7 +105,8 @@ export interface ExtractedDocumentFields {
 export async function transcribeAudioWithSarvam(
   audioBuffer: Buffer,
   filename: string,
-  language: SupportedLanguage
+  language: SupportedLanguage,
+  mimeType = 'audio/wav'
 ): Promise<SarvamTranscriptionResult> {
   const apiKey = getSarvamApiKey();
   if (!apiKey) {
@@ -84,14 +117,11 @@ export async function transcribeAudioWithSarvam(
   const formData = new FormData();
   
   // Create a Blob from the audio buffer
-  const audioBlob = new Blob([new Uint8Array(audioBuffer) as unknown as BlobPart], { type: 'audio/wav' });
+  const audioBlob = new Blob([new Uint8Array(audioBuffer) as unknown as BlobPart], { type: mimeType });
   formData.append('file', audioBlob, filename || 'audio.wav');
   formData.append('model', 'saaras:v4');
   formData.append('language_code', sarvamLang);
   formData.append('mode', 'transcribe');
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout
 
   try {
     const response = await fetch(`${SARVAM_BASE_URL}/speech-to-text`, {
@@ -100,24 +130,20 @@ export async function transcribeAudioWithSarvam(
         'api-subscription-key': apiKey,
       },
       body: formData,
-      signal: controller.signal,
+      signal: AbortSignal.timeout(STT_TIMEOUT_MS),
     });
-
-    clearTimeout(timeoutId);
 
     const data = await response.json();
     if (!response.ok) {
-      const errMsg = data?.error?.message || data?.message || `Sarvam STT failed with HTTP ${response.status}`;
-      throw new Error(errMsg);
+      throw new Error(sarvamErrorMessage(data, `Sarvam STT failed with HTTP ${response.status}`));
     }
 
     return {
       transcript: data.transcript || '',
       languageCode: data.language_code || sarvamLang,
     };
-  } catch (err: any) {
-    clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
+  } catch (err: unknown) {
+    if (isAbortOrTimeout(err)) {
       throw new Error('Sarvam Speech-to-Text request timed out. Please try a shorter audio clip.');
     }
     throw err;
@@ -137,16 +163,13 @@ export async function convertTextToSpeechWithSarvam(
     throw new Error('SARVAM_API_KEY is not configured on the server.');
   }
 
-  const cleanText = text.replace(/[*#_`>]/g, '').trim().slice(0, 1000); // clean markdown and limit
+  const cleanText = text.replace(/[*#_`>]/g, '').trim().slice(0, MAX_TTS_CHARS); // strip markdown and limit
   if (!cleanText) {
     throw new Error('Text to convert into speech cannot be empty.');
   }
 
   const sarvamLang = mapLanguageToSarvamCode(language);
   const speaker = SARVAM_SPEAKERS[language] || SARVAM_SPEAKERS.en;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
 
   try {
     const response = await fetch(`${SARVAM_BASE_URL}/text-to-speech`, {
@@ -161,15 +184,12 @@ export async function convertTextToSpeechWithSarvam(
         model: 'bulbul:v4-flash',
         speaker,
       }),
-      signal: controller.signal,
+      signal: AbortSignal.timeout(TTS_TIMEOUT_MS),
     });
-
-    clearTimeout(timeoutId);
 
     const data = await response.json();
     if (!response.ok) {
-      const errMsg = data?.error?.message || data?.message || `Sarvam TTS failed with HTTP ${response.status}`;
-      throw new Error(errMsg);
+      throw new Error(sarvamErrorMessage(data, `Sarvam TTS failed with HTTP ${response.status}`));
     }
 
     const audioBase64 = data.audios?.[0] || '';
@@ -181,9 +201,8 @@ export async function convertTextToSpeechWithSarvam(
       audioBase64,
       contentType: 'audio/wav',
     };
-  } catch (err: any) {
-    clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
+  } catch (err: unknown) {
+    if (isAbortOrTimeout(err)) {
       throw new Error('Sarvam Text-to-Speech request timed out.');
     }
     throw err;
@@ -219,12 +238,12 @@ export async function analyzeDocumentWithSarvam(
       'api-subscription-key': apiKey,
     },
     body: formData,
+    signal: AbortSignal.timeout(DOC_REQUEST_TIMEOUT_MS),
   });
 
   const submitData = await submitRes.json();
   if (!submitRes.ok) {
-    const errMsg = submitData?.error?.message || submitData?.message || `Sarvam Document AI submission failed with HTTP ${submitRes.status}`;
-    throw new Error(errMsg);
+    throw new Error(sarvamErrorMessage(submitData, `Sarvam Document AI submission failed with HTTP ${submitRes.status}`));
   }
 
   const jobId = submitData.job_id;
@@ -232,24 +251,33 @@ export async function analyzeDocumentWithSarvam(
     throw new Error('No job_id returned by Sarvam Document AI.');
   }
 
-  // Step 2: Poll status up to 10 iterations (20s max)
+  // Step 2: Poll status, bounded by total elapsed time
   let extractedRawText = '';
-  for (let i = 0; i < 10; i++) {
-    await new Promise((res) => setTimeout(res, 2000)); // wait 2s
+  const deadline = Date.now() + DOC_POLL_MAX_TOTAL_MS;
+  while (Date.now() < deadline) {
+    await new Promise((res) => setTimeout(res, DOC_POLL_INTERVAL_MS));
 
-    const statusRes = await fetch(`${SARVAM_BASE_URL}/doc-ai/v1/job/${jobId}/status`, {
-      headers: { 'api-subscription-key': apiKey },
-    });
+    const remainingMs = Math.max(1, deadline - Date.now());
+    let statusRes: Response;
+    try {
+      statusRes = await fetch(`${SARVAM_BASE_URL}/doc-ai/v1/job/${jobId}/status`, {
+        headers: { 'api-subscription-key': apiKey },
+        signal: AbortSignal.timeout(Math.min(DOC_REQUEST_TIMEOUT_MS, remainingMs)),
+      });
+    } catch (err: unknown) {
+      if (isAbortOrTimeout(err)) break;
+      throw err;
+    }
 
     if (!statusRes.ok) continue;
 
-    const statusData = await statusRes.json();
+    const statusData: SarvamDocJobStatus = await statusRes.json();
     if (statusData.status === 'completed' || statusData.status === 'partially_completed') {
       // Try to fetch text from pages or artifacts
       if (statusData.output?.text) {
         extractedRawText = statusData.output.text;
       } else if (Array.isArray(statusData.documents)) {
-        extractedRawText = statusData.documents.map((d: any) => d.extracted_text || d.text || '').join('\n');
+        extractedRawText = statusData.documents.map((d) => d.extracted_text || d.text || '').join('\n');
       }
       break;
     } else if (statusData.status === 'failed' || statusData.status === 'rejected') {

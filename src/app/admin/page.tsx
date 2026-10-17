@@ -1,13 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { getAllUsers } from '@/lib/auth';
-import { getLocalEarningsRecords } from '@/lib/storage';
-import { getLocalComplaints } from '@/lib/complaintStorage';
 import { supabase } from '@/lib/supabase';
 import { fetchAdminOverview } from '@/lib/workspace';
+import { summarizeEarnings } from '@/lib/calculations';
 import { UserProfile, EarningsRecord, ComplaintDraft } from '@/types';
 import {
   ShieldAlert,
@@ -15,13 +13,7 @@ import {
   Wallet,
   FileText,
   Search,
-  CheckCircle2,
-  Calendar,
-  Building,
-  Mail,
-  ArrowRight,
   TrendingUp,
-  AlertTriangle,
 } from 'lucide-react';
 
 export default function AdminPortalPage() {
@@ -33,44 +25,44 @@ export default function AdminPortalPage() {
   const [complaints, setComplaints] = useState<ComplaintDraft[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Real workers only: no sample data, so the numbers reflect actual signups and records.
     async function loadData() {
-      if (supabase && isAdmin) {
-        try {
-          const overview = await fetchAdminOverview(supabase);
-          if (overview.users.length > 0) {
-            setUsers(overview.users);
-            setEarnings(overview.earnings);
-            setComplaints(overview.complaints);
-            return;
-          }
-        } catch (err) {
-          console.warn('Supabase fetchAdminOverview error, using local fallback:', err);
-        }
+      if (!supabase || !isAdmin) return;
+      try {
+        const overview = await fetchAdminOverview(supabase);
+        setUsers(overview.users);
+        setEarnings(overview.earnings);
+        setComplaints(overview.complaints);
+        setLoadError(null);
+      } catch (err) {
+        setLoadError(err instanceof Error ? err.message : 'Could not load worker data.');
       }
-      setUsers(getAllUsers());
-      setEarnings(getLocalEarningsRecords());
-      setComplaints(getLocalComplaints());
     }
     loadData();
   }, [isAdmin]);
 
-  // Compute aggregate system metrics
-  const totalWorkers = users.filter((u) => u.role === 'worker').length;
-  const totalPlatformGross = earnings.reduce(
-    (acc, e) => acc + e.grossEarnings + e.incentives,
-    0
+  // Aggregate metrics and filters, recomputed only when their inputs change.
+  const totalWorkers = useMemo(() => users.filter((u) => u.role === 'worker').length, [users]);
+  const { totalGross: totalPlatformGross, totalNet: totalNetTakeHome } = useMemo(
+    () => summarizeEarnings(earnings),
+    [earnings]
   );
-  const totalNetTakeHome = earnings.reduce((acc, e) => acc + e.netEarnings, 0);
   const totalDisputedGrievances = complaints.length;
 
-  const filteredUsers = users.filter(
-    (u) =>
-      u.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.primaryPlatform.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.city.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredUsers = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    return users.filter((u) =>
+      [u.fullName, u.email, u.primaryPlatform, u.city].some((field) => field.toLowerCase().includes(q))
+    );
+  }, [users, searchQuery]);
+
+  const userEarnings = useMemo(() => earnings.filter((e) => e.userId === selectedUser?.id), [earnings, selectedUser]);
+  const userComplaints = useMemo(
+    () => complaints.filter((c) => c.userId === selectedUser?.id),
+    [complaints, selectedUser]
   );
 
   if (loading) {
@@ -84,7 +76,7 @@ export default function AdminPortalPage() {
         <h1 className="text-lg font-bold text-white">Admin access required</h1>
         <p className="text-xs text-slate-400">Your account does not have supervisor permissions.</p>
         <button
-          onClick={() => router.replace('/')}
+          onClick={() => router.replace('/dashboard')}
           className="text-xs font-bold text-emerald-400 hover:underline"
         >
           Go to Dashboard
@@ -95,6 +87,12 @@ export default function AdminPortalPage() {
 
   return (
     <div className="space-y-8 animate-fadeIn">
+      {loadError && (
+        <div role="alert" className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs">
+          {loadError}
+        </div>
+      )}
+
       {/* Admin Access Notice Header */}
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-rose-950/40 via-[#0e172a] to-[#0a1224] border border-rose-500/30 p-6 shadow-xl">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -272,10 +270,10 @@ export default function AdminPortalPage() {
             <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-2">
               <h4 className="text-xs font-bold text-white flex items-center justify-between">
                 <span>Shift Records Ledger</span>
-                <span className="text-emerald-400">{earnings.length} shifts found</span>
+                <span className="text-emerald-400">{userEarnings.length} shifts found</span>
               </h4>
               <div className="divide-y divide-slate-800 text-xs max-h-48 overflow-y-auto pr-1">
-                {earnings.map((e) => (
+                {userEarnings.map((e) => (
                   <div key={e.id} className="py-2 flex items-center justify-between">
                     <div>
                       <span className="font-semibold text-slate-200">{e.platform}</span>
@@ -295,10 +293,10 @@ export default function AdminPortalPage() {
             <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-2">
               <h4 className="text-xs font-bold text-white flex items-center justify-between">
                 <span>Formal Grievances Drafted</span>
-                <span className="text-rose-400">{complaints.length} letters</span>
+                <span className="text-rose-400">{userComplaints.length} letters</span>
               </h4>
               <div className="divide-y divide-slate-800 text-xs max-h-48 overflow-y-auto pr-1">
-                {complaints.map((c) => (
+                {userComplaints.map((c) => (
                   <div key={c.id} className="py-2 space-y-0.5">
                     <div className="flex items-center justify-between">
                       <span className="font-semibold text-white">{c.title}</span>

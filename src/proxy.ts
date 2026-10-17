@@ -39,6 +39,11 @@ function isAnonRateLimited(request: NextRequest): boolean {
   return entry.count > ANON_API_LIMIT;
 }
 
+// Supabase stores the session in cookies named sb-<project-ref>-auth-token (possibly chunked).
+function hasSessionCookie(request: NextRequest): boolean {
+  return request.cookies.getAll().some((c) => c.name.startsWith('sb-') && c.name.includes('-auth-token'));
+}
+
 function redirectTo(request: NextRequest, pathname: string, next?: string) {
   const url = request.nextUrl.clone();
   url.pathname = pathname;
@@ -51,24 +56,29 @@ export async function proxy(request: NextRequest) {
   if (!isSupabaseConfigured) return NextResponse.next();
 
   let response = NextResponse.next({ request });
+  let isAuthenticated = false;
 
-  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
+  // Anonymous visitors have no session to verify or refresh: skip the Supabase call entirely.
+  if (hasSessionCookie(request)) {
+    const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet, headers) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+          response = NextResponse.next({ request });
+          cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+          Object.entries(headers).forEach(([key, value]) => response.headers.set(key, value));
+        },
       },
-      setAll(cookiesToSet, headers) {
-        cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-        response = NextResponse.next({ request });
-        cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
-        Object.entries(headers).forEach(([key, value]) => response.headers.set(key, value));
-      },
-    },
-  });
+    });
 
-  // Validates the JWT and refreshes an expiring session (writes new cookies via setAll).
-  const { data } = await supabase.auth.getClaims();
-  const isAuthenticated = Boolean(data?.claims);
+    // Validates the JWT and refreshes an expiring session (writes new cookies via setAll).
+    const { data } = await supabase.auth.getClaims();
+    isAuthenticated = Boolean(data?.claims);
+  }
+
   const isDemo = request.cookies.get(DEMO_COOKIE)?.value === '1';
   const { pathname, search } = request.nextUrl;
 

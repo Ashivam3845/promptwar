@@ -3,8 +3,9 @@
 import React, { useState } from 'react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useTheme } from '@/context/ThemeContext';
-import { resetDemoEarningsRecords } from '@/lib/storage';
-import { SupportedLanguage } from '@/types';
+import { useAuth } from '@/context/AuthContext';
+import { SupportedLanguage, WorkType } from '@/types';
+import { WORK_TYPE_OPTIONS, ALL_PLATFORMS, INDIAN_STATES } from '@/lib/profileOptions';
 import {
   Settings,
   Languages,
@@ -12,26 +13,105 @@ import {
   Shield,
   RotateCcw,
   CheckCircle2,
-  Database,
-  ExternalLink,
+  Trash2,
+  AlertCircle,
   Sun,
   Moon,
 } from 'lucide-react';
 
+const INPUT_CLASS =
+  'w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-emerald-500 disabled:opacity-60';
+
 export default function SettingsPage() {
   const { t, language, setLanguage } = useLanguage();
   const { theme, setTheme } = useTheme();
-  const [workerName, setWorkerName] = useState('Ramesh Kumar (Partner)');
-  const [primaryPlatform, setPrimaryPlatform] = useState('Zomato');
-  const [city, setCity] = useState('Bengaluru (Indiranagar Zone)');
-  const [resetDone, setResetDone] = useState(false);
+  const { mode, profile, store, updateProfile, logout } = useAuth();
+  const isUser = mode === 'user';
 
-  const handleResetData = () => {
-    if (confirm('Are you sure you want to restore the default sample shifts?')) {
-      resetDemoEarningsRecords();
-      setResetDone(true);
-      setTimeout(() => setResetDone(false), 3000);
+  const [fullName, setFullName] = useState(profile?.fullName ?? '');
+  const [phoneNumber, setPhoneNumber] = useState(profile?.phoneNumber ?? '');
+  const [workType, setWorkType] = useState<WorkType | ''>(profile?.workType ?? '');
+  const [primaryPlatform, setPrimaryPlatform] = useState(profile?.primaryPlatform ?? '');
+  const [city, setCity] = useState(profile?.city ?? '');
+  const [state, setState] = useState(profile?.state ?? '');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // The profile loads after the first render; fill the form once it arrives.
+  const [loadedFor, setLoadedFor] = useState(profile?.id);
+  if (profile && profile.id !== loadedFor) {
+    setLoadedFor(profile.id);
+    setFullName(profile.fullName);
+    setPhoneNumber(profile.phoneNumber ?? '');
+    setWorkType(profile.workType ?? '');
+    setPrimaryPlatform(profile.primaryPlatform);
+    setCity(profile.city);
+    setState(profile.state ?? '');
+  }
+
+  const flash = (message: string) => {
+    setError(null);
+    setNotice(message);
+    setTimeout(() => setNotice(null), 3000);
+  };
+
+  const changeLanguage = (lang: SupportedLanguage) => {
+    setLanguage(lang);
+    if (isUser) updateProfile({ preferredLanguage: lang });
+  };
+
+  const handleSaveProfile = async (e: React.SubmitEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!fullName.trim()) {
+      setError('Please enter your name.');
+      return;
     }
+    setBusy(true);
+    const res = await updateProfile({
+      fullName: fullName.trim(),
+      phoneNumber: phoneNumber.trim(),
+      workType: workType || undefined,
+      primaryPlatform,
+      city: city.trim(),
+      state,
+    });
+    setBusy(false);
+    if (res.success) flash('Profile saved.');
+    else setError(res.error || 'Could not save your profile.');
+  };
+
+  const handleResetDemo = async () => {
+    if (!store || !confirm('Restore the original sample data?')) return;
+    await store.deleteAllData();
+    flash('Sample data restored.');
+  };
+
+  const handleDeleteRecords = async () => {
+    if (!store || !confirm('Permanently delete all your shifts and complaint drafts? This cannot be undone.')) return;
+    setBusy(true);
+    try {
+      await store.deleteAllData();
+      flash('All your shifts and complaint drafts were deleted.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete your records.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!confirm('Permanently delete your account and all your data? This cannot be undone.')) return;
+    setBusy(true);
+    const res = await fetch('/api/account', { method: 'DELETE' });
+    if (res.ok) {
+      // The server already signed us out; this clears the client session and returns to the start.
+      await logout();
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    setError(data.error || 'Could not delete your account.');
   };
 
   return (
@@ -47,10 +127,17 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      {resetDone && (
+      {notice && (
         <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4" />
-          <span>Default demonstration data restored.</span>
+          <span>{notice}</span>
+        </div>
+      )}
+
+      {error && (
+        <div role="alert" className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-semibold flex items-center gap-2">
+          <AlertCircle className="w-4 h-4" />
+          <span>{error}</span>
         </div>
       )}
 
@@ -113,7 +200,7 @@ export default function SettingsPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
           <button
-            onClick={() => setLanguage('en')}
+            onClick={() => changeLanguage('en')}
             className={`p-4 rounded-xl border text-left transition-all ${
               language === 'en'
                 ? 'bg-emerald-500/10 border-emerald-500 text-white shadow-md'
@@ -125,7 +212,7 @@ export default function SettingsPage() {
           </button>
 
           <button
-            onClick={() => setLanguage('hi')}
+            onClick={() => changeLanguage('hi')}
             className={`p-4 rounded-xl border text-left transition-all ${
               language === 'hi'
                 ? 'bg-emerald-500/10 border-emerald-500 text-white shadow-md'
@@ -137,7 +224,7 @@ export default function SettingsPage() {
           </button>
 
           <button
-            onClick={() => setLanguage('pa')}
+            onClick={() => changeLanguage('pa')}
             className={`p-4 rounded-xl border text-left transition-all ${
               language === 'pa'
                 ? 'bg-emerald-500/10 border-emerald-500 text-white shadow-md'
@@ -151,72 +238,66 @@ export default function SettingsPage() {
       </div>
 
       {/* Profile Card */}
-      <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+      <form onSubmit={handleSaveProfile} className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
         <h2 className="text-base font-bold text-white flex items-center gap-2">
           <User className="w-5 h-5 text-emerald-400" />
           <span>{t.settings.profileInfo}</span>
         </h2>
 
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">
-              {t.settings.workerName}
-            </label>
-            <input
-              type="text"
-              value={workerName}
-              onChange={(e) => setWorkerName(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-emerald-500"
-            />
-          </div>
+        {!isUser && <p className="text-xs text-amber-300">{t.journey.demoBanner}</p>}
 
+        <fieldset disabled={!isUser || busy} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">
-                {t.settings.primaryPlatform}
-              </label>
-              <input
-                type="text"
-                value={primaryPlatform}
-                onChange={(e) => setPrimaryPlatform(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-emerald-500"
-              />
+              <label htmlFor="set-name" className="block text-xs font-semibold text-slate-300 mb-1">{t.settings.workerName}</label>
+              <input id="set-name" type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} autoComplete="name" className={INPUT_CLASS} />
             </div>
-
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">
-                {t.settings.city}
-              </label>
-              <input
-                type="text"
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-emerald-500"
-              />
+              <label htmlFor="set-phone" className="block text-xs font-semibold text-slate-300 mb-1">Phone</label>
+              <input id="set-phone" type="tel" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} autoComplete="tel" className={INPUT_CLASS} />
+            </div>
+            <div>
+              <label htmlFor="set-worktype" className="block text-xs font-semibold text-slate-300 mb-1">{t.onboarding.workTypeTitle}</label>
+              <select id="set-worktype" value={workType} onChange={(e) => setWorkType(e.target.value as WorkType | '')} className={INPUT_CLASS}>
+                <option value="">—</option>
+                {WORK_TYPE_OPTIONS.map((wt) => (
+                  <option key={wt} value={wt}>{t.onboarding.workTypes[wt]}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="set-platform" className="block text-xs font-semibold text-slate-300 mb-1">{t.settings.primaryPlatform}</label>
+              <select id="set-platform" value={primaryPlatform} onChange={(e) => setPrimaryPlatform(e.target.value)} className={INPUT_CLASS}>
+                <option value="">—</option>
+                {ALL_PLATFORMS.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="set-state" className="block text-xs font-semibold text-slate-300 mb-1">{t.onboarding.state}</label>
+              <select id="set-state" value={state} onChange={(e) => setState(e.target.value)} className={INPUT_CLASS}>
+                <option value="">{t.onboarding.selectState}</option>
+                {INDIAN_STATES.map((st) => (
+                  <option key={st} value={st}>{st}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="set-city" className="block text-xs font-semibold text-slate-300 mb-1">{t.settings.city}</label>
+              <input id="set-city" type="text" value={city} onChange={(e) => setCity(e.target.value)} autoComplete="address-level2" className={INPUT_CLASS} />
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Supabase & Cloud Storage Status */}
-      <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-xl space-y-3">
-        <h2 className="text-base font-bold text-white flex items-center gap-2">
-          <Database className="w-5 h-5 text-emerald-400" />
-          <span>Cloud Database & Persistence Status</span>
-        </h2>
-        <div className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between text-xs">
-          <div>
-            <span className="font-semibold text-slate-200">Storage Backend:</span>
-            <span className="ml-2 text-emerald-400 font-bold">Local Demo Storage + Supabase Adapter Ready</span>
-          </div>
-          <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded">
-            Offline Resilient
-          </span>
-        </div>
-        <p className="text-xs text-slate-400">
-          The app functions 100% offline or standalone using browser-level verified demo storage, and provides ready-to-run Supabase PostgreSQL schema migrations in <code className="bg-slate-900 px-1 py-0.5 rounded text-slate-300">/supabase/migrations</code>.
-        </p>
-      </div>
+          {isUser && (
+            <div className="flex justify-end">
+              <button type="submit" className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-slate-950 text-xs font-bold">
+                {busy ? t.common.loading : t.common.save}
+              </button>
+            </div>
+          )}
+        </fieldset>
+      </form>
 
       {/* Data Management & Privacy */}
       <div className="bg-[#0f172a] border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
@@ -225,28 +306,54 @@ export default function SettingsPage() {
           <span>{t.settings.dataManagement}</span>
         </h2>
 
-        <p className="text-xs text-slate-300 leading-relaxed">
-          {t.settings.privacyStatement}
-        </p>
+        <p className="text-xs text-slate-300 leading-relaxed">{t.settings.privacyStatement}</p>
 
-        <div className="pt-2 flex items-center justify-between border-t border-slate-800/80">
-          <div>
-            <span className="text-xs font-semibold text-white block">
-              {t.settings.clearLocalData}
-            </span>
-            <span className="text-[11px] text-slate-400">
-              {t.settings.clearNotice}
-            </span>
+        {isUser ? (
+          <>
+            <div className="pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-slate-800/80">
+              <div>
+                <span className="text-xs font-semibold text-white block">Delete all my records</span>
+                <span className="text-[11px] text-slate-400">Removes every shift and complaint draft you saved. Your account stays.</span>
+              </div>
+              <button
+                onClick={handleDeleteRecords}
+                disabled={busy}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-slate-200 text-xs font-semibold flex items-center gap-1.5 shrink-0"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete records</span>
+              </button>
+            </div>
+            <div className="pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-slate-800/80">
+              <div>
+                <span className="text-xs font-semibold text-rose-300 block">Delete my account</span>
+                <span className="text-[11px] text-slate-400">Permanently deletes your login, profile, shifts and drafts.</span>
+              </div>
+              <button
+                onClick={handleDeleteAccount}
+                disabled={busy}
+                className="px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 disabled:opacity-60 text-rose-300 border border-rose-500/30 text-xs font-semibold flex items-center gap-1.5 shrink-0"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete account</span>
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="pt-3 flex items-center justify-between border-t border-slate-800/80">
+            <div>
+              <span className="text-xs font-semibold text-white block">{t.settings.clearLocalData}</span>
+              <span className="text-[11px] text-slate-400">{t.settings.clearNotice}</span>
+            </div>
+            <button
+              onClick={handleResetDemo}
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset Demo</span>
+            </button>
           </div>
-
-          <button
-            onClick={handleResetData}
-            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset Demo</span>
-          </button>
-        </div>
+        )}
       </div>
     </div>
   );

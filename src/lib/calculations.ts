@@ -1,4 +1,4 @@
-import { EarningsCalculationResult } from '@/types';
+import { EarningsCalculationResult, EarningsRecord } from '@/types';
 
 /**
  * Deterministic formula:
@@ -105,5 +105,39 @@ export function calculateEarnings(input: RawEarningsInput): EarningsCalculationR
     totalDeductions,
     netEarnings,
     effectiveHourlyRate,
+  };
+}
+
+export interface EarningsSummary {
+  shifts: number;
+  totalGross: number; // base pay + incentives
+  totalExpenses: number;
+  totalDeductions: number;
+  totalNet: number;
+  totalHours: number;
+  avgHourlyRate: number; // 0 when no hours recorded
+}
+
+/** Aggregates recorded shifts in a single pass. */
+export function summarizeEarnings(
+  records: Pick<EarningsRecord, 'grossEarnings' | 'incentives' | 'totalExpenses' | 'platformDeductions' | 'netEarnings' | 'hoursWorked'>[]
+): EarningsSummary {
+  const sum = { totalGross: 0, totalExpenses: 0, totalDeductions: 0, totalNet: 0, totalHours: 0 };
+  for (const r of records) {
+    sum.totalGross += r.grossEarnings + r.incentives;
+    sum.totalExpenses += r.totalExpenses;
+    sum.totalDeductions += r.platformDeductions;
+    sum.totalNet += r.netEarnings;
+    sum.totalHours += r.hoursWorked;
+  }
+  const round = (n: number) => Math.round(n * 100) / 100;
+  return {
+    shifts: records.length,
+    totalGross: round(sum.totalGross),
+    totalExpenses: round(sum.totalExpenses),
+    totalDeductions: round(sum.totalDeductions),
+    totalNet: round(sum.totalNet),
+    totalHours: round(sum.totalHours),
+    avgHourlyRate: sum.totalHours > 0 ? round(sum.totalNet / sum.totalHours) : 0,
   };
 }

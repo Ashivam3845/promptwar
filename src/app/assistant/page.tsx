@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useLanguage } from '@/context/LanguageContext';
 import { ChatMessage } from '@/types';
 import {
@@ -41,8 +41,8 @@ export default function AssistantPage() {
   const audioChunksRef = useRef<Blob[]>([]);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Initialize with a welcome greeting based on active language
-  useEffect(() => {
+  // Welcome greeting follows the active language without resetting the conversation.
+  const welcomeMessage: ChatMessage = useMemo(() => {
     const welcomeText =
       language === 'hi'
         ? 'नमस्ते साथी! मैं गिग साथी AI हूँ। आप बोलकर (माइक बटन दबाकर) या लिखकर गलत कटौतियों, ई-श्रम कार्ड बीमा, या आईडी ब्लॉक पर अपने अधिकार पूछ सकते हैं। आप किसी भी उत्तर को सुन भी सकते हैं!'
@@ -50,15 +50,9 @@ export default function AssistantPage() {
         ? 'ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਸਾਥੀ ਜੀ! ਮੈਂ ਗਿੱਗ ਸਾਥੀ AI ਹਾਂ। ਤੁਸੀਂ ਮਾਈਕ ਬਟਨ ਦਬਾ ਕੇ ਬੋਲ ਕੇ ਜਾਂ ਲਿਖ ਕੇ ਗਲਤ ਕਟੌਤੀਆਂ ਜਾਂ ਈ-ਸ਼੍ਰਮ ਕਾਰਡ ਬਾਰੇ ਪੁੱਛ ਸਕਦੇ ਹੋ, ਅਤੇ ਜਵਾਬ ਵੀ ਸੁਣ ਸਕਦੇ ਹੋ!'
         : 'Namaste! I am GigSaathi AI. You can speak or type your question about wrongful platform deductions, claiming ₹2 Lakh accident cover on e-Shram, or legal rights. You can also listen to spoken responses in English, Hindi, or Punjabi!';
 
-    setMessages([
-      {
-        id: 'welcome-msg',
-        role: 'assistant',
-        content: welcomeText,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      },
-    ]);
+    return { id: 'welcome-msg', role: 'assistant', content: welcomeText, timestamp: '' };
   }, [language]);
+  const displayedMessages = [welcomeMessage, ...messages];
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -88,7 +82,7 @@ export default function AssistantPage() {
 
       mediaRecorder.start();
       setIsRecording(true);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Microphone error:', err);
       setErrorNotice('Microphone access denied or not supported by browser. Please enable audio permissions.');
     }
@@ -127,9 +121,9 @@ export default function AssistantPage() {
       } else {
         setErrorNotice('No clear speech was recognized. Please try speaking again closer to the mic.');
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('STT error:', err);
-      setErrorNotice(err.message || 'Error communicating with Sarvam voice recognition.');
+      setErrorNotice((err instanceof Error && err.message) || 'Error communicating with Sarvam voice recognition.');
     } finally {
       setIsTranscribing(false);
     }
@@ -179,15 +173,45 @@ export default function AssistantPage() {
       };
 
       setMessages((prev) => [...prev, botMessage]);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Chat error:', err);
-      setErrorNotice(err.message || 'Network error or OpenAI API unavailable.');
+      setErrorNotice((err instanceof Error && err.message) || 'Network error or OpenAI API unavailable.');
     } finally {
       setLoading(false);
     }
   };
 
   // Text-to-Speech playback using Sarvam TTS
+
+  // Generated speech per `${language}:${messageId}`, kept for this visit only.
+  const ttsCacheRef = useRef(new Map<string, string>());
+
+  // Stop any playing answer when leaving the page.
+  useEffect(() => () => currentAudioRef.current?.pause(), []);
+
+  const playAudio = async (audioSrc: string, messageId: string) => {
+    const audio = new Audio(audioSrc);
+    currentAudioRef.current = audio;
+
+    audio.onplay = () => {
+      setSpeakingMessageId(messageId);
+      setIsTtsLoading(null);
+    };
+
+    audio.onended = () => {
+      setSpeakingMessageId(null);
+      currentAudioRef.current = null;
+    };
+
+    audio.onerror = () => {
+      setSpeakingMessageId(null);
+      setIsTtsLoading(null);
+      setErrorNotice('Failed to play audio response.');
+    };
+
+    await audio.play();
+  };
+
   const handlePlayAudio = async (messageId: string, text: string) => {
     // If currently playing this message, stop it
     if (speakingMessageId === messageId) {
@@ -209,6 +233,14 @@ export default function AssistantPage() {
     setErrorNotice(null);
 
     try {
+      // Replaying a message reuses its audio instead of calling the TTS API again.
+      const cacheKey = `${language}:${messageId}`;
+      const cached = ttsCacheRef.current.get(cacheKey);
+      if (cached) {
+        playAudio(cached, messageId);
+        return;
+      }
+
       const response = await fetch('/api/voice/speak', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -225,30 +257,12 @@ export default function AssistantPage() {
 
       if (data.audioBase64) {
         const audioSrc = `data:${data.contentType || 'audio/wav'};base64,${data.audioBase64}`;
-        const audio = new Audio(audioSrc);
-        currentAudioRef.current = audio;
-
-        audio.onplay = () => {
-          setSpeakingMessageId(messageId);
-          setIsTtsLoading(null);
-        };
-
-        audio.onended = () => {
-          setSpeakingMessageId(null);
-          currentAudioRef.current = null;
-        };
-
-        audio.onerror = () => {
-          setSpeakingMessageId(null);
-          setIsTtsLoading(null);
-          setErrorNotice('Failed to play audio response.');
-        };
-
-        await audio.play();
+        ttsCacheRef.current.set(cacheKey, audioSrc);
+        await playAudio(audioSrc, messageId);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('TTS error:', err);
-      setErrorNotice(err.message || 'Failed to generate voice speech.');
+      setErrorNotice((err instanceof Error && err.message) || 'Failed to generate voice speech.');
       setIsTtsLoading(null);
       setSpeakingMessageId(null);
     }
@@ -297,7 +311,7 @@ export default function AssistantPage() {
 
       {/* Chat Messages Scroll Container */}
       <div className="flex-1 overflow-y-auto space-y-4 pr-1">
-        {messages.map((m) => {
+        {displayedMessages.map((m) => {
           const isUser = m.role === 'user';
           const isSpeaking = speakingMessageId === m.id;
           const isAudioLoading = isTtsLoading === m.id;
@@ -493,7 +507,7 @@ export default function AssistantPage() {
       )}
 
       {/* Quick Suggested Questions Pill Bar */}
-      {messages.length <= 2 && !voiceReviewText && (
+      {messages.length <= 1 && !voiceReviewText && (
         <div className="space-y-1.5 pt-1">
           <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1">
             <Sparkles className="w-3 h-3 text-emerald-400" />

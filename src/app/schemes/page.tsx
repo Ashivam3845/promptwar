@@ -1,26 +1,34 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useLanguage } from '@/context/LanguageContext';
+import { useAuth } from '@/context/AuthContext';
 import { searchSchemes, VERIFIED_SCHEMES } from '@/lib/schemes';
-import { WelfareScheme } from '@/types';
+import { stateToJurisdiction } from '@/lib/profileOptions';
+
+// Filter options come from the data, so a newly added state scheme appears automatically.
+const JURISDICTIONS = Array.from(new Set(VERIFIED_SCHEMES.map((s) => s.jurisdiction)));
 import {
   ShieldCheck,
   Search,
   ExternalLink,
   CheckCircle,
   AlertCircle,
-  HelpCircle,
-  Filter,
   FileCheck,
 } from 'lucide-react';
 
 export default function SchemesPage() {
   const { t, language } = useLanguage();
   const [searchQuery, setSearchQuery] = useState('');
-  const [jurisdiction, setJurisdiction] = useState('All');
+  const { profile } = useAuth();
+  // Until the user picks a filter, default to their own state (central schemes always show too).
+  const [chosenJurisdiction, setJurisdiction] = useState<string | null>(null);
+  const profileJurisdiction = stateToJurisdiction(profile?.state);
+  const jurisdiction =
+    chosenJurisdiction ??
+    (profileJurisdiction && (JURISDICTIONS as string[]).includes(profileJurisdiction) ? profileJurisdiction : 'All');
 
-  const schemes = searchSchemes(searchQuery, jurisdiction);
+  const schemes = useMemo(() => searchSchemes(searchQuery, jurisdiction), [searchQuery, jurisdiction]);
 
   return (
     <div className="space-y-6">
@@ -43,6 +51,7 @@ export default function SchemesPage() {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            aria-label={t.common.search}
             placeholder={t.common.search + ' (e.g. e-Shram, accident insurance, pension, Delhi)'}
             className="w-full bg-[#0f172a] border border-slate-800 focus:border-emerald-500 text-sm rounded-xl pl-10 pr-4 py-3 text-white outline-none placeholder-slate-500"
           />
@@ -50,14 +59,15 @@ export default function SchemesPage() {
 
         <div>
           <select
+            aria-label="Filter by state or central schemes"
             value={jurisdiction}
             onChange={(e) => setJurisdiction(e.target.value)}
             className="w-full bg-[#0f172a] border border-slate-800 focus:border-emerald-500 text-sm rounded-xl px-4 py-3 text-slate-200 outline-none"
           >
             <option value="All">All Jurisdictions (National & States)</option>
-            <option value="Central (All India)">Central (All India)</option>
-            <option value="Rajasthan">Rajasthan</option>
-            <option value="Delhi NCT">Delhi NCT</option>
+            {JURISDICTIONS.map((j) => (
+              <option key={j} value={j}>{j}</option>
+            ))}
           </select>
         </div>
       </div>

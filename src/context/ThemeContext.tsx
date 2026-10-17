@@ -1,6 +1,7 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useEffect, useSyncExternalStore } from 'react';
+import { createPreference } from '@/lib/preferences';
 
 type Theme = 'light' | 'dark';
 
@@ -16,64 +17,27 @@ const ThemeContext = createContext<ThemeContextType>({
   setTheme: () => {},
 });
 
+const themePreference = createPreference<Theme>('gigsaathi_theme', ['light', 'dark'], 'dark');
+
+function applyTheme(theme: Theme) {
+  for (const el of [document.documentElement, document.body]) {
+    el.setAttribute('data-theme', theme);
+    el.classList.toggle('light', theme === 'light');
+    el.classList.toggle('dark', theme === 'dark');
+  }
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>('dark');
+  const theme = useSyncExternalStore(themePreference.subscribe, themePreference.get, themePreference.getServer);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('gigsaathi_theme') as Theme;
-      if (stored === 'light' || stored === 'dark') {
-        setThemeState(stored);
-        applyTheme(stored);
-      } else {
-        applyTheme('dark');
-      }
-    } catch {
-      applyTheme('dark');
-    }
-  }, []);
+    applyTheme(theme);
+  }, [theme]);
 
-  const applyTheme = (t: Theme) => {
-    if (typeof document === 'undefined') return;
-    const root = document.documentElement;
-    const body = document.body;
-    root.setAttribute('data-theme', t);
-    if (body) body.setAttribute('data-theme', t);
-
-    if (t === 'light') {
-      root.classList.remove('dark');
-      root.classList.add('light');
-      if (body) {
-        body.classList.remove('dark');
-        body.classList.add('light');
-      }
-    } else {
-      root.classList.remove('light');
-      root.classList.add('dark');
-      if (body) {
-        body.classList.remove('light');
-        body.classList.add('dark');
-      }
-    }
-  };
-
-  const setTheme = (newTheme: Theme) => {
-    setThemeState(newTheme);
-    applyTheme(newTheme);
-    try {
-      localStorage.setItem('gigsaathi_theme', newTheme);
-    } catch {
-      // Ignore
-    }
-  };
-
-  const toggleTheme = () => {
-    const next = theme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
-  };
+  const toggleTheme = () => themePreference.set(theme === 'dark' ? 'light' : 'dark');
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>
+    <ThemeContext.Provider value={{ theme, toggleTheme, setTheme: themePreference.set }}>
       {children}
     </ThemeContext.Provider>
   );

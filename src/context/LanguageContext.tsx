@@ -1,8 +1,10 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useEffect, useSyncExternalStore } from 'react';
 import { SupportedLanguage } from '@/types';
 import { translations } from '@/lib/i18n';
+import { createPreference } from '@/lib/preferences';
+import { useAuth } from '@/context/AuthContext';
 
 interface LanguageContextType {
   language: SupportedLanguage;
@@ -16,33 +18,28 @@ const LanguageContext = createContext<LanguageContextType>({
   t: translations.en,
 });
 
+const languagePreference = createPreference<SupportedLanguage>('gigsaathi_language', ['en', 'hi', 'pa'], 'en');
+
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [language, setLanguageState] = useState<SupportedLanguage>('en');
+  const language = useSyncExternalStore(languagePreference.subscribe, languagePreference.get, languagePreference.getServer);
+  const { user } = useAuth();
 
+  // On sign-in, switch to the language saved in the user's profile (synced across devices).
+  const savedLanguage = user?.onboarded ? user.preferredLanguage : null;
+  const userId = user?.id;
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('gigsaathi_language') as SupportedLanguage;
-      if (stored && (stored === 'en' || stored === 'hi' || stored === 'pa')) {
-        setLanguageState(stored);
-      }
-    } catch {
-      // Ignore local storage error
-    }
-  }, []);
+    if (savedLanguage) languagePreference.set(savedLanguage);
+  }, [userId, savedLanguage]);
 
-  const setLanguage = (lang: SupportedLanguage) => {
-    setLanguageState(lang);
-    try {
-      localStorage.setItem('gigsaathi_language', lang);
-    } catch {
-      // Ignore
-    }
-  };
+  // Screen readers and browser translation rely on the document language.
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
 
   const t = translations[language] || translations.en;
 
   return (
-    <LanguageContext.Provider value={{ language, setLanguage, t }}>
+    <LanguageContext.Provider value={{ language, setLanguage: languagePreference.set, t }}>
       {children}
     </LanguageContext.Provider>
   );

@@ -108,3 +108,19 @@ export interface ChatMessage {
     url: string;
   }[];
 }
+
+// Response of POST /api/documents/analyze. Fields are candidates the user must confirm.
+export interface DocumentAnalysisResult {
+  success: boolean;
+  filename: string;
+  fileSize: number;
+  fields: {
+    platformName: string;
+    amountDisputed: number | null;
+    incidentDate: string;
+    orderIdOrRef: string;
+    deductionReason: string;
+  };
+  fullExtractedText: string;
+  confidenceNotes: string[];
+}

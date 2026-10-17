@@ -1,13 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import { useLanguage } from '@/context/LanguageContext';
-import { ComplaintDraft } from '@/types';
-import {
-  getLocalComplaints,
-  saveLocalComplaint,
-  deleteLocalComplaint,
-} from '@/lib/complaintStorage';
+import { useAuth } from '@/context/AuthContext';
+import { ComplaintDraft, DocumentAnalysisResult } from '@/types';
+import { stashPendingDraft, takePendingDraft } from '@/lib/pendingDraft';
 import {
   FileText,
   Sparkles,
@@ -16,26 +14,22 @@ import {
   Bookmark,
   Trash2,
   AlertCircle,
-  ExternalLink,
-  ChevronDown,
-  Clock,
-  ShieldAlert,
-  Send,
   Upload,
   FileCheck2,
   RefreshCw,
-  Eye,
   CheckCircle,
 } from 'lucide-react';
 
 export default function ComplaintsPage() {
   const { t, language } = useLanguage();
+  // Guests can generate a draft right away; saving needs an account (or demo mode).
+  const { store, profile } = useAuth();
   const [drafts, setDrafts] = useState<ComplaintDraft[]>([]);
   const [activeDraft, setActiveDraft] = useState<ComplaintDraft | null>(null);
 
   // Form states
   const [description, setDescription] = useState('');
-  const [platformOrEmployer, setPlatformOrEmployer] = useState('Zomato');
+  const [platformOrEmployer, setPlatformOrEmployer] = useState(profile?.primaryPlatform || 'Zomato');
   const [incidentDate, setIncidentDate] = useState('');
   const [todayStr, setTodayStr] = useState('');
   const [amountDisputed, setAmountDisputed] = useState('');
@@ -45,7 +39,7 @@ export default function ComplaintsPage() {
   // Document Intelligence (Sarvam Vision) Upload States
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isAnalyzingDoc, setIsAnalyzingDoc] = useState(false);
-  const [docAnalysisResult, setDocAnalysisResult] = useState<any | null>(null);
+  const [docAnalysisResult, setDocAnalysisResult] = useState<DocumentAnalysisResult | null>(null);
   const [docUploadError, setDocUploadError] = useState<string | null>(null);
   const [isTransferred, setIsTransferred] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -55,20 +49,33 @@ export default function ComplaintsPage() {
   const [copied, setCopied] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  useEffect(() => {
-    const today = new Date().toISOString().split('T')[0];
-    setIncidentDate(today);
-    setTodayStr(today);
-    refreshDrafts();
-  }, []);
-
-  const refreshDrafts = () => {
-    const list = getLocalComplaints();
-    setDrafts(list);
-    if (list.length > 0 && !activeDraft) {
-      setActiveDraft(list[0]);
+  const refreshDrafts = async (openId?: string | null) => {
+    if (!store) return;
+    try {
+      const list = await store.listComplaints();
+      setDrafts(list);
+      const requested = openId ? list.find((d) => d.id === openId) : undefined;
+      if (requested) setActiveDraft(requested);
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : 'Could not load saved drafts.');
     }
   };
+
+  useEffect(() => {
+    const today = new Date().toISOString().split('T')[0];
+    // Today's date comes from the browser clock, which is unknown while prerendering.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIncidentDate(today);
+    setTodayStr(today);
+    // ?draft=<id> (from the dashboard) reopens that saved draft.
+    refreshDrafts(new URLSearchParams(window.location.search).get('draft'));
+    // A draft generated before signing in comes back here, ready to save.
+    if (store) {
+      const pending = takePendingDraft();
+      if (pending) setActiveDraft(pending);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store]);
 
   // Handle Document Upload & Analysis via Sarvam Vision
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -97,9 +104,9 @@ export default function ComplaintsPage() {
       }
 
       setDocAnalysisResult(data);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Doc analysis error:', err);
-      setDocUploadError(err.message || 'Error communicating with document analysis service.');
+      setDocUploadError((err instanceof Error && err.message) || 'Error communicating with document analysis service.');
     } finally {
       setIsAnalyzingDoc(false);
     }
@@ -170,29 +177,37 @@ export default function ComplaintsPage() {
       };
 
       setActiveDraft(generated);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Complaint generation error:', err);
-      setErrorNotice(err.message || 'Error communicating with AI service');
+      setErrorNotice((err instanceof Error && err.message) || 'Error communicating with AI service');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSaveActive = () => {
-    if (!activeDraft) return;
-    saveLocalComplaint(activeDraft);
-    refreshDrafts();
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
+  const handleSaveActive = async () => {
+    if (!activeDraft || !store) return;
+    try {
+      const saved = await store.saveComplaint(activeDraft);
+      setActiveDraft(saved);
+      setDrafts((prev) => [saved, ...prev.filter((d) => d.id !== saved.id)]);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : 'Could not save this draft.');
+    }
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('Delete this complaint draft?')) {
-      deleteLocalComplaint(id);
-      refreshDrafts();
+  const handleDelete = async (id: string) => {
+    if (!store || !confirm('Delete this complaint draft?')) return;
+    try {
+      await store.deleteComplaint(id);
+      setDrafts((prev) => prev.filter((d) => d.id !== id));
       if (activeDraft?.id === id) {
         setActiveDraft(null);
       }
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : 'Could not delete this draft.');
     }
   };
 
@@ -430,7 +445,7 @@ export default function ComplaintsPage() {
             </label>
             <select
               value={recipientCategory}
-              onChange={(e) => setRecipientCategory(e.target.value as any)}
+              onChange={(e) => setRecipientCategory(e.target.value as ComplaintDraft['recipientCategory'])}
               className="w-full sm:w-1/2 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-emerald-500"
             >
               <option value="Company Grievance Cell">Company Grievance Cell (First Escalation)</option>
@@ -501,13 +516,25 @@ export default function ComplaintsPage() {
                 )}
               </button>
 
-              <button
-                onClick={handleSaveActive}
-                className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-500/20 transition-colors"
-              >
-                <Bookmark className="w-4 h-4" />
-                <span>{saveSuccess ? t.common.saved : t.common.save}</span>
-              </button>
+              {store ? (
+                <button
+                  onClick={handleSaveActive}
+                  className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-500/20 transition-colors"
+                >
+                  <Bookmark className="w-4 h-4" />
+                  <span>{saveSuccess ? t.common.saved : t.common.save}</span>
+                </button>
+              ) : (
+                <Link
+                  href="/login?mode=signup&next=/complaints"
+                  onClick={() => stashPendingDraft(activeDraft)}
+                  title={t.journey.signInToSave}
+                  className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-500/20 transition-colors"
+                >
+                  <Bookmark className="w-4 h-4" />
+                  <span>{t.journey.signInToSaveCta}</span>
+                </Link>
+              )}
             </div>
           </div>
 

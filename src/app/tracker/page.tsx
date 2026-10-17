@@ -1,34 +1,33 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useLanguage } from '@/context/LanguageContext';
+import { useAuth } from '@/context/AuthContext';
 import { EarningsRecord } from '@/types';
-import {
-  getLocalEarningsRecords,
-  fetchEarningsRecords,
-  saveEarningsRecord,
-  deleteEarningsRecord,
-} from '@/lib/storage';
-import { validateEarningsInput, calculateEarnings } from '@/lib/calculations';
+import { isKnownPlatform } from '@/lib/profileOptions';
+import { validateEarningsInput, calculateEarnings, summarizeEarnings } from '@/lib/calculations';
 import {
   Wallet,
   PlusCircle,
-  Calendar,
-  Fuel,
   AlertTriangle,
-  Clock,
   Trash2,
   Edit2,
   CheckCircle2,
   X,
   Filter,
-  DollarSign,
   Info,
 } from 'lucide-react';
 
 export default function EarningsTrackerPage() {
-  const { t, language } = useLanguage();
+  const { t } = useLanguage();
+  const { store, profile } = useAuth();
+  // Pre-fill new shifts with the platform chosen during onboarding.
+  const defaultPlatform: EarningsRecord['platform'] = isKnownPlatform(profile?.primaryPlatform)
+    ? profile.primaryPlatform
+    : 'Zomato';
   const [records, setRecords] = useState<EarningsRecord[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [selectedPlatform, setSelectedPlatform] = useState<string>('All');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -48,29 +47,35 @@ export default function EarningsTrackerPage() {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
 
+  const refreshRecords = async () => {
+    if (!store) return;
+    try {
+      setRecords(await store.listEarnings());
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : t.journey.loadError);
+    }
+  };
+
   useEffect(() => {
     const today = new Date().toISOString().split('T')[0];
+    // Today's date comes from the browser clock, which is unknown while prerendering.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setWorkDate(today);
     setTodayStr(today);
     refreshRecords();
-  }, []);
-
-  const refreshRecords = async () => {
-    // Initial quick load from local cache
-    setRecords(getLocalEarningsRecords());
-    // Then async sync with Supabase
-    try {
-      const live = await fetchEarningsRecords();
-      setRecords(live);
-    } catch (err) {
-      console.warn('Could not refresh from Supabase:', err);
+    // Arriving from "Log your first shift" opens the form straight away.
+    if (new URLSearchParams(window.location.search).get('add') === '1') {
+      setPlatform(defaultPlatform);
+      setIsModalOpen(true);
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store]);
 
   const resetForm = () => {
     setEditingId(null);
     setWorkDate(new Date().toISOString().split('T')[0]);
-    setPlatform('Zomato');
+    setPlatform(defaultPlatform);
     setDescription('');
     setGrossEarnings('');
     setIncentives('');
@@ -102,11 +107,14 @@ export default function EarningsTrackerPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm('Are you sure you want to delete this shift entry?')) {
-      await deleteEarningsRecord(id);
-      await refreshRecords();
+    if (!store || !confirm('Are you sure you want to delete this shift entry?')) return;
+    try {
+      await store.deleteEarning(id);
+      setRecords((prev) => prev.filter((r) => r.id !== id));
       setFeedbackMessage('Entry deleted.');
       setTimeout(() => setFeedbackMessage(null), 3000);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Could not delete entry.');
     }
   };
 
@@ -127,7 +135,10 @@ export default function EarningsTrackerPage() {
       return;
     }
 
-    await saveEarningsRecord({
+    if (!store) return;
+    setSaving(true);
+    try {
+      const saved = await store.saveEarning({
       ...(editingId ? { id: editingId } : {}),
       workDate,
       platform,
@@ -138,11 +149,20 @@ export default function EarningsTrackerPage() {
       otherExpenses: Number(otherExpenses) || 0,
       platformDeductions: Number(platformDeductions) || 0,
       hoursWorked: Number(hoursWorked) || 0,
-    });
+      });
+      // Update the list from the saved row instead of refetching everything.
+      setRecords((prev) =>
+        [saved, ...prev.filter((r) => r.id !== saved.id)].sort((x, y) => y.workDate.localeCompare(x.workDate))
+      );
+    } catch (err) {
+      setFormErrors({ form: err instanceof Error ? err.message : 'Could not save this shift.' });
+      return;
+    } finally {
+      setSaving(false);
+    }
 
     setIsModalOpen(false);
     resetForm();
-    await refreshRecords();
     setFeedbackMessage(editingId ? 'Shift record updated!' : 'New shift recorded successfully!');
     setTimeout(() => setFeedbackMessage(null), 3500);
   };
@@ -157,18 +177,16 @@ export default function EarningsTrackerPage() {
     hoursWorked,
   });
 
-  // Filter records
-  const filteredRecords =
-    selectedPlatform === 'All'
-      ? records
-      : records.filter((r) => r.platform === selectedPlatform);
-
-  const totalFilteredNet = filteredRecords.reduce((acc, r) => acc + r.netEarnings, 0);
-  const totalFilteredHours = filteredRecords.reduce((acc, r) => acc + r.hoursWorked, 0);
-  const avgFilteredRate =
-    totalFilteredHours > 0
-      ? Math.round((totalFilteredNet / totalFilteredHours) * 100) / 100
-      : 0;
+  // Filter records (recomputed only when the list or filter changes)
+  const filteredRecords = useMemo(
+    () => (selectedPlatform === 'All' ? records : records.filter((r) => r.platform === selectedPlatform)),
+    [records, selectedPlatform]
+  );
+  const {
+    totalNet: totalFilteredNet,
+    totalHours: totalFilteredHours,
+    avgHourlyRate: avgFilteredRate,
+  } = useMemo(() => summarizeEarnings(filteredRecords), [filteredRecords]);
 
   return (
     <div className="space-y-6">
@@ -195,6 +213,13 @@ export default function EarningsTrackerPage() {
         <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4" />
           <span>{feedbackMessage}</span>
+        </div>
+      )}
+
+      {loadError && (
+        <div role="alert" className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-semibold flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>{loadError}</span>
         </div>
       )}
 
@@ -414,7 +439,7 @@ export default function EarningsTrackerPage() {
                   </label>
                   <select
                     value={platform}
-                    onChange={(e) => setPlatform(e.target.value as any)}
+                    onChange={(e) => setPlatform(e.target.value as EarningsRecord['platform'])}
                     className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-emerald-500"
                   >
                     <option value="Zomato">Zomato</option>
@@ -585,6 +610,10 @@ export default function EarningsTrackerPage() {
                 )}
               </div>
 
+              {formErrors.form && (
+                <p role="alert" className="text-xs text-rose-400">{formErrors.form}</p>
+              )}
+
               {/* Modal Buttons */}
               <div className="pt-2 flex items-center justify-end gap-3">
                 <button
@@ -596,9 +625,10 @@ export default function EarningsTrackerPage() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-md shadow-emerald-500/20"
+                  disabled={saving}
+                  className="px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-slate-950 font-bold text-xs shadow-md shadow-emerald-500/20"
                 >
-                  {t.common.save}
+                  {saving ? t.common.loading : t.common.save}
                 </button>
               </div>
             </form>

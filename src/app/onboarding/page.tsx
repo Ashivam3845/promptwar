@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { useLanguage } from '@/context/LanguageContext';
 import { fill } from '@/lib/i18n-journey';
+import { hasPendingDraft } from '@/lib/pendingDraft';
 import { WORK_TYPE_OPTIONS, PLATFORMS_BY_WORK_TYPE, ALL_PLATFORMS, INDIAN_STATES } from '@/lib/profileOptions';
 import { SupportedLanguage, WorkType, UserProfile } from '@/types';
 import { Languages, Bike, Building2, MapPin, Info, AlertCircle, LoaderCircle, Check } from 'lucide-react';
@@ -62,7 +63,8 @@ function OnboardingFlow({ user }: { user: UserProfile }) {
       onboarded: true,
     });
     if (res.success) {
-      router.replace('/dashboard');
+      // Guests who signed up to save a complaint go straight back to it.
+      router.replace(hasPendingDraft() ? '/complaints' : '/dashboard');
     } else {
       setSaving(false);
       setError(res.error || 'Could not save your profile.');

@@ -60,6 +60,16 @@ export const demoStore: DataStore = {
   },
 };
 
+// Explicit column lists: fetch only what the UI maps (net_earnings is recomputed client-side).
+const EARNINGS_COLUMNS =
+  'id,user_id,work_date,platform,description,gross_earnings,incentives,fuel_expenses,other_expenses,platform_deductions,hours_worked,created_at,updated_at';
+const COMPLAINT_COLUMNS =
+  'id,user_id,title,platform_or_employer,incident_date,amount_disputed,recipient_category,subject,formal_letter,facts_summary,legal_fairness_basis,requested_relief,supporting_evidence,language,status,created_at';
+const PROFILE_COLUMNS =
+  'id,email,full_name,phone_number,primary_platform,city,state,work_type,preferred_language,onboarded,created_at';
+// Upper bound for the admin overview so the page stays fast as the network grows.
+const ADMIN_ROW_LIMIT = 2000;
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- rows are mapped field by field below */
@@ -138,7 +148,7 @@ export function createSupabaseStore(client: SupabaseClient): DataStore {
     async listEarnings() {
       const { data, error } = await client
         .from('earnings_records')
-        .select('*')
+        .select(EARNINGS_COLUMNS)
         .order('work_date', { ascending: false })
         .order('created_at', { ascending: false });
       if (error) throw toDataStoreError(error);
@@ -163,7 +173,7 @@ export function createSupabaseStore(client: SupabaseClient): DataStore {
         input.id && UUID_PATTERN.test(input.id)
           ? client.from('earnings_records').update(row).eq('id', input.id)
           : client.from('earnings_records').insert(row);
-      const { data, error } = await query.select().single();
+      const { data, error } = await query.select(EARNINGS_COLUMNS).single();
       if (error) throw toDataStoreError(error);
       return rowToEarning(data);
     },
@@ -176,7 +186,7 @@ export function createSupabaseStore(client: SupabaseClient): DataStore {
     async listComplaints() {
       const { data, error } = await client
         .from('complaint_drafts')
-        .select('*')
+        .select(COMPLAINT_COLUMNS)
         .order('created_at', { ascending: false });
       if (error) throw toDataStoreError(error);
       return data.map(rowToComplaint);
@@ -203,7 +213,7 @@ export function createSupabaseStore(client: SupabaseClient): DataStore {
         input.id && UUID_PATTERN.test(input.id)
           ? client.from('complaint_drafts').update(row).eq('id', input.id)
           : client.from('complaint_drafts').insert(row);
-      const { data, error } = await query.select().single();
+      const { data, error } = await query.select(COMPLAINT_COLUMNS).single();
       if (error) throw toDataStoreError(error);
       return rowToComplaint(data);
     },
@@ -218,10 +228,11 @@ export function createSupabaseStore(client: SupabaseClient): DataStore {
       const { data } = await client.auth.getUser();
       const userId = data.user?.id;
       if (!userId) throw new DataStoreError('You are not signed in.');
-      for (const table of ['earnings_records', 'complaint_drafts']) {
-        const { error } = await client.from(table).delete().eq('user_id', userId);
-        if (error) throw toDataStoreError(error);
-      }
+      const results = await Promise.all(
+        ['earnings_records', 'complaint_drafts'].map((table) => client.from(table).delete().eq('user_id', userId))
+      );
+      const failed = results.find((r) => r.error)?.error;
+      if (failed) throw toDataStoreError(failed);
     },
   };
 }
@@ -229,9 +240,9 @@ export function createSupabaseStore(client: SupabaseClient): DataStore {
 // Admin portal: everything visible to an admin under the is_admin() RLS policies.
 export async function fetchAdminOverview(client: SupabaseClient) {
   const [profiles, earnings, complaints] = await Promise.all([
-    client.from('profiles').select('*').order('created_at', { ascending: false }),
-    client.from('earnings_records').select('*'),
-    client.from('complaint_drafts').select('*'),
+    client.from('profiles').select(PROFILE_COLUMNS).order('created_at', { ascending: false }).limit(ADMIN_ROW_LIMIT),
+    client.from('earnings_records').select(EARNINGS_COLUMNS).order('work_date', { ascending: false }).limit(ADMIN_ROW_LIMIT),
+    client.from('complaint_drafts').select(COMPLAINT_COLUMNS).order('created_at', { ascending: false }).limit(ADMIN_ROW_LIMIT),
   ]);
   const error = profiles.error || earnings.error || complaints.error;
   if (error) throw toDataStoreError(error);

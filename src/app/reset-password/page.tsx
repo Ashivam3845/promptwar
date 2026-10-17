@@ -35,7 +35,7 @@ export default function ResetPasswordPage() {
     setSubmitting(false);
     if (res.success) {
       setDone(true);
-      setTimeout(() => router.replace('/'), 1500);
+      setTimeout(() => router.replace('/dashboard'), 1500);
     } else {
       setError(res.error || 'Could not update password.');
     }
