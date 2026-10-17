@@ -11,7 +11,6 @@ import {
   UserPlus,
   User,
   Mail,
-  Phone,
   CheckCircle2,
   AlertCircle,
   MailCheck,
@@ -22,7 +21,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Only follow same-site relative paths from ?next= to avoid open redirects.
 function safeNextPath(next: string | null) {
-  return next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  return next && next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard';
 }
 
 export default function LoginPage() {
@@ -38,14 +37,13 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const { login, register } = useAuth();
 
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const [mode, setMode] = useState<'login' | 'signup'>(() =>
+    searchParams.get('mode') === 'signup' ? 'signup' : 'login'
+  );
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [primaryPlatform, setPrimaryPlatform] = useState('Zomato');
-  const [city, setCity] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(() =>
@@ -77,7 +75,8 @@ function LoginForm() {
     setSubmitting(true);
     const res = await login(email, password);
     if (res.success) {
-      router.replace(safeNextPath(searchParams.get('next')));
+      // First login after signup goes through onboarding; returning users resume where they were.
+      router.replace(res.profile?.onboarded ? safeNextPath(searchParams.get('next')) : '/onboarding');
       router.refresh();
     } else {
       setSubmitting(false);
@@ -106,7 +105,7 @@ function LoginForm() {
     }
 
     setSubmitting(true);
-    const res = await register({ email, password, fullName, phoneNumber, primaryPlatform, city });
+    const res = await register({ email, password, fullName });
     setSubmitting(false);
 
     if (!res.success) {
@@ -114,7 +113,7 @@ function LoginForm() {
     } else if (res.needsConfirmation) {
       setConfirmationSentTo(email.trim());
     } else {
-      router.replace('/');
+      router.replace('/onboarding');
       router.refresh();
     }
   };
@@ -152,7 +151,7 @@ function LoginForm() {
         <p className="text-xs text-slate-400">
           {mode === 'login'
             ? 'Log in to track earnings, check schemes, and file grievances.'
-            : 'Join GigSaathi AI. It is free for every gig worker.'}
+            : 'Free for every worker. We will ask a few optional questions next.'}
         </p>
       </div>
 
@@ -330,62 +329,6 @@ function LoginForm() {
                 placeholder="Repeat your password"
                 autoComplete="new-password"
               />
-            </div>
-
-            <div>
-              <label htmlFor="signup-phone" className="block text-xs font-semibold text-slate-300 mb-1">
-                Phone Number
-              </label>
-              <div className="relative">
-                <Phone className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
-                <input
-                  id="signup-phone"
-                  type="tel"
-                  value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(e.target.value)}
-                  placeholder="+91 98XXX XXXXX"
-                  autoComplete="tel"
-                  className="w-full bg-slate-900 border border-slate-700 focus:border-emerald-500 text-xs rounded-xl pl-9 pr-3 py-2.5 text-white outline-none"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label htmlFor="signup-platform" className="block text-xs font-semibold text-slate-300 mb-1">
-                  Primary Platform
-                </label>
-                <select
-                  id="signup-platform"
-                  value={primaryPlatform}
-                  onChange={(e) => setPrimaryPlatform(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 focus:border-emerald-500 text-xs rounded-xl px-3 py-2.5 text-white outline-none"
-                >
-                  <option value="Zomato">Zomato</option>
-                  <option value="Swiggy">Swiggy</option>
-                  <option value="Uber">Uber</option>
-                  <option value="Ola">Ola</option>
-                  <option value="Blinkit">Blinkit</option>
-                  <option value="Zepto">Zepto</option>
-                  <option value="Daily Wage">Daily Wage</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="signup-city" className="block text-xs font-semibold text-slate-300 mb-1">
-                  City / Region
-                </label>
-                <input
-                  id="signup-city"
-                  type="text"
-                  value={city}
-                  onChange={(e) => setCity(e.target.value)}
-                  placeholder="e.g. Delhi"
-                  autoComplete="address-level2"
-                  className="w-full bg-slate-900 border border-slate-700 focus:border-emerald-500 text-xs rounded-xl px-3 py-2.5 text-white outline-none"
-                />
-              </div>
             </div>
 
             <button
