@@ -84,7 +84,7 @@ OPENAI_MODEL=gpt-4o-mini
 # Sarvam AI Configuration (Multilingual Voice STT, TTS & Document Intelligence)
 SARVAM_API_KEY=sk_your_sarvam_key_here
 
-# Supabase Configuration (Optional for cloud database sync; local demo mode is active by default)
+# Supabase Configuration (accounts and each user's own records)
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your_supabase_anon_key_here
 ```
@@ -99,13 +99,18 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your_supabase_anon_key_here
 - Node.js >= 20
 - npm >= 10
 
+### Database setup (once)
+Run the SQL files in `supabase/migrations/` **in filename order** in the Supabase SQL editor. They create the `profiles`, `earnings_records` and `complaint_drafts` tables with Row Level Security (each user can only read and write their own rows; admins get read-only access to everything).
+
 ### Installation & Run
 ```bash
 # 1. Install dependencies
 npm install
 
-# 2. Run automated test suite
-npx vitest run
+# 2. Run checks
+npm test            # vitest
+npm run typecheck   # tsc --noEmit
+npm run lint        # eslint
 
 # 3. Start local development server
 npm run dev
@@ -132,14 +137,41 @@ The test suite validates:
 - Handling of zero hours (prevents division by zero).
 - Curated welfare schemes schema integrity and search filtering.
 
+- New-user journey rules: a new account starts with zero records (no sample data), demo data stays under demo-only storage keys, admin role can only come from `app_metadata`, and a guest's draft survives sign-up.
+- Supabase data mapping (insert vs update, derived fields, friendly error when migrations are missing).
+- Proxy access rules (public, demo and account-only pages; `next=` redirects) and the anonymous API rate limit.
+- API input validation: bad JSON, unsupported languages, oversized text and files, disallowed file types, and no provider error details leaking to clients.
+- Translation completeness for the onboarding and dashboard strings in English, Hindi and Punjabi.
+
 To run tests:
 ```bash
-npx vitest run
+npm test
 ```
 
 ---
 
-## 6. Privacy & Ethics Considerations
+## 6. New User Journey
+
+1. **Landing (`/`)**: what GigSaathi does, language picker, **Get Started**, **Try Demo**, and a direct link to Ask AI without signing up.
+2. **Sign up or demo**: sign-up asks only for name, email and password. **Try Demo** opens the app with clearly labelled sample data that lives only in the browser and is never mixed with real accounts.
+3. **Quick onboarding (`/onboarding`)**: language, work type, platform and state/city. Every step after language explains why it is asked and can be skipped.
+4. **Personal dashboard (`/dashboard`)**: a new user sees a welcome and a prompt to log their first shift. No numbers are shown until they record their own shifts. Returning users see their real totals, recent shifts and saved complaint drafts.
+5. **Choose a goal**: unfair deduction, real earnings, welfare schemes or voice help. Nothing forces a fixed order.
+6. **Progressive access**: Ask AI, Schemes and complaint drafting work without an account (AI endpoints are rate-limited for guests). Saving a draft asks the guest to sign in, and the draft is restored afterwards.
+7. **Return visits**: the session is restored, the saved language applies on every device, and saved drafts can be reopened from the dashboard.
+
+| Access level | Pages |
+| :--- | :--- |
+| Anyone | `/`, `/assistant`, `/schemes`, `/complaints` (save needs an account), `/login` |
+| Account or demo | `/dashboard`, `/tracker`, `/settings` |
+| Account only | `/onboarding`, `/reset-password`, `/admin` (admins only) |
+
+### Data deletion policy
+- **Settings → Delete records** removes all of the user's shifts and complaint drafts immediately. The account remains.
+- **Settings → Delete account** permanently deletes the login. Profile, shifts and drafts are removed with it through `ON DELETE CASCADE`. This requires `SUPABASE_SERVICE_ROLE_KEY` on the server.
+- Chat conversations are kept only in the browser tab and are not stored.
+
+## 7. Privacy & Ethics Considerations
 
 - **Human-in-the-Loop Review**: Workers review and edit voice transcriptions before sending to the assistant.
 - **Factual Integrity**: Extracting facts from a screenshot does not constitute a legal declaration that a penalty is unlawful. Facts are presented to the worker for explicit confirmation.
