@@ -1,6 +1,7 @@
 import { ComplaintDraft } from '@/types';
 
-const COMPLAINTS_STORAGE_KEY = 'gigsaathi_complaint_drafts_v1';
+// Demo-mode only, like lib/storage.ts. Signed-in users' drafts are stored in Supabase.
+const COMPLAINTS_STORAGE_KEY = 'gigsaathi_demo_complaints_v1';
 
 export const INITIAL_DEMO_COMPLAINTS: ComplaintDraft[] = [
   {
@@ -113,5 +114,11 @@ export function deleteLocalComplaint(id: string): void {
   const filtered = current.filter((c) => c.id !== id);
   if (typeof window !== 'undefined') {
     localStorage.setItem(COMPLAINTS_STORAGE_KEY, JSON.stringify(filtered));
+  }
+}
+
+export function resetDemoComplaints(): void {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(COMPLAINTS_STORAGE_KEY, JSON.stringify(INITIAL_DEMO_COMPLAINTS));
   }
 }

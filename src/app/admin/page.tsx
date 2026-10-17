@@ -6,6 +6,8 @@ import { useAuth } from '@/context/AuthContext';
 import { getAllUsers } from '@/lib/auth';
 import { getLocalEarningsRecords } from '@/lib/storage';
 import { getLocalComplaints } from '@/lib/complaintStorage';
+import { supabase } from '@/lib/supabase';
+import { fetchAdminOverview } from '@/lib/workspace';
 import { UserProfile, EarningsRecord, ComplaintDraft } from '@/types';
 import {
   ShieldAlert,
@@ -24,7 +26,7 @@ import {
 
 export default function AdminPortalPage() {
   const router = useRouter();
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, loading } = useAuth();
 
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [earnings, setEarnings] = useState<EarningsRecord[]>([]);
@@ -33,10 +35,26 @@ export default function AdminPortalPage() {
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
 
   useEffect(() => {
-    setUsers(getAllUsers());
-    setEarnings(getLocalEarningsRecords());
-    setComplaints(getLocalComplaints());
-  }, []);
+    async function loadData() {
+      if (supabase && isAdmin) {
+        try {
+          const overview = await fetchAdminOverview(supabase);
+          if (overview.users.length > 0) {
+            setUsers(overview.users);
+            setEarnings(overview.earnings);
+            setComplaints(overview.complaints);
+            return;
+          }
+        } catch (err) {
+          console.warn('Supabase fetchAdminOverview error, using local fallback:', err);
+        }
+      }
+      setUsers(getAllUsers());
+      setEarnings(getLocalEarningsRecords());
+      setComplaints(getLocalComplaints());
+    }
+    loadData();
+  }, [isAdmin]);
 
   // Compute aggregate system metrics
   const totalWorkers = users.filter((u) => u.role === 'worker').length;
@@ -54,6 +72,26 @@ export default function AdminPortalPage() {
       u.primaryPlatform.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.city.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  if (loading) {
+    return <div className="text-center text-xs text-slate-400 py-16">Loading…</div>;
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="max-w-md mx-auto mt-10 bg-[#0f172a] border border-rose-500/30 rounded-2xl p-6 text-center space-y-3">
+        <ShieldAlert className="w-10 h-10 text-rose-400 mx-auto" />
+        <h1 className="text-lg font-bold text-white">Admin access required</h1>
+        <p className="text-xs text-slate-400">Your account does not have supervisor permissions.</p>
+        <button
+          onClick={() => router.replace('/')}
+          className="text-xs font-bold text-emerald-400 hover:underline"
+        >
+          Go to Dashboard
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-fadeIn">

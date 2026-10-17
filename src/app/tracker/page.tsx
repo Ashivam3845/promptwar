@@ -5,8 +5,9 @@ import { useLanguage } from '@/context/LanguageContext';
 import { EarningsRecord } from '@/types';
 import {
   getLocalEarningsRecords,
-  saveLocalEarningsRecord,
-  deleteLocalEarningsRecord,
+  fetchEarningsRecords,
+  saveEarningsRecord,
+  deleteEarningsRecord,
 } from '@/lib/storage';
 import { validateEarningsInput, calculateEarnings } from '@/lib/calculations';
 import {
@@ -54,8 +55,16 @@ export default function EarningsTrackerPage() {
     refreshRecords();
   }, []);
 
-  const refreshRecords = () => {
+  const refreshRecords = async () => {
+    // Initial quick load from local cache
     setRecords(getLocalEarningsRecords());
+    // Then async sync with Supabase
+    try {
+      const live = await fetchEarningsRecords();
+      setRecords(live);
+    } catch (err) {
+      console.warn('Could not refresh from Supabase:', err);
+    }
   };
 
   const resetForm = () => {
@@ -92,16 +101,16 @@ export default function EarningsTrackerPage() {
     setIsModalOpen(true);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to delete this shift entry?')) {
-      deleteLocalEarningsRecord(id);
-      refreshRecords();
+      await deleteEarningsRecord(id);
+      await refreshRecords();
       setFeedbackMessage('Entry deleted.');
       setTimeout(() => setFeedbackMessage(null), 3000);
     }
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const validation = validateEarningsInput({
       workDate,
@@ -118,7 +127,7 @@ export default function EarningsTrackerPage() {
       return;
     }
 
-    saveLocalEarningsRecord({
+    await saveEarningsRecord({
       ...(editingId ? { id: editingId } : {}),
       workDate,
       platform,
@@ -133,7 +142,7 @@ export default function EarningsTrackerPage() {
 
     setIsModalOpen(false);
     resetForm();
-    refreshRecords();
+    await refreshRecords();
     setFeedbackMessage(editingId ? 'Shift record updated!' : 'New shift recorded successfully!');
     setTimeout(() => setFeedbackMessage(null), 3500);
   };

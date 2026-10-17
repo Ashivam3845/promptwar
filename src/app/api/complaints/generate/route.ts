@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getOpenAIClient, defaultModel, isOpenAIConfigured } from '@/lib/openai';
-
+import {
+  getOpenAIClient,
+  defaultOpenAiModel,
+  isOpenAIConfigured,
+  isGeminiConfigured,
+  callGeminiGenerate,
+} from '@/lib/openai';
 
 export async function POST(req: NextRequest) {
   try {
@@ -21,21 +26,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!isOpenAIConfigured) {
+    if (!isOpenAIConfigured && !isGeminiConfigured) {
       return NextResponse.json(
         {
-          error: 'OPENAI_API_KEY is not configured on the server. Please set OPENAI_API_KEY in .env.local to enable live AI complaint generation.',
+          error: 'No active AI key configured on the server. Please set OPENAI_API_KEY or GEMINI_API_KEY in .env.',
           isConfigError: true,
         },
         { status: 503 }
-      );
-    }
-
-    const openai = getOpenAIClient();
-    if (!openai) {
-      return NextResponse.json(
-        { error: 'OpenAI client failed to initialize.' },
-        { status: 500 }
       );
     }
 
@@ -73,18 +70,45 @@ ${description.slice(0, 3000)}
 """
 `;
 
-    const response = await openai.chat.completions.create({
-      model: defaultModel,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.3,
-    });
+    let rawContent = '{}';
+    let openaiFailed = false;
 
-    const rawContent = response.choices[0]?.message?.content || '{}';
-    const parsed = JSON.parse(rawContent);
+    // Primary: Try OpenAI if configured
+    if (isOpenAIConfigured) {
+      try {
+        const openai = getOpenAIClient();
+        if (openai) {
+          const response = await openai.chat.completions.create({
+            model: defaultOpenAiModel,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+            response_format: { type: 'json_object' },
+            temperature: 0.3,
+          });
+
+          rawContent = response.choices[0]?.message?.content || '{}';
+        }
+      } catch (err: any) {
+        console.warn('OpenAI complaint generation failed, falling back to Gemini:', err.message);
+        openaiFailed = true;
+      }
+    }
+
+    // Secondary / Fallback: Gemini 3.8 Flash
+    if ((!isOpenAIConfigured || openaiFailed || rawContent === '{}') && isGeminiConfigured) {
+      const geminiResult = await callGeminiGenerate({
+        contents: [{ parts: [{ text: userPrompt }] }],
+        systemInstruction: systemPrompt,
+        responseFormatJson: true,
+      });
+      rawContent = geminiResult || '{}';
+    }
+
+    // Clean JSON markdown blocks if any
+    const cleanJson = rawContent.replace(/```json/g, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(cleanJson);
 
     return NextResponse.json({
       title: parsed.title || 'Grievance Representation',
@@ -102,7 +126,7 @@ ${description.slice(0, 3000)}
     });
   } catch (error: any) {
     console.error('Error in /api/complaints/generate:', error);
-    const errorMessage = error?.message || 'Upstream OpenAI service failure';
+    const errorMessage = error?.message || 'Upstream AI service failure';
     const status = error?.status || 500;
     return NextResponse.json(
       { error: `Complaint Generator Error: ${errorMessage}` },

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLanguage } from '@/context/LanguageContext';
 import { ComplaintDraft } from '@/types';
 import {
@@ -21,6 +21,11 @@ import {
   Clock,
   ShieldAlert,
   Send,
+  Upload,
+  FileCheck2,
+  RefreshCw,
+  Eye,
+  CheckCircle,
 } from 'lucide-react';
 
 export default function ComplaintsPage() {
@@ -33,15 +38,17 @@ export default function ComplaintsPage() {
   const [platformOrEmployer, setPlatformOrEmployer] = useState('Zomato');
   const [incidentDate, setIncidentDate] = useState('');
   const [todayStr, setTodayStr] = useState('');
-
-  useEffect(() => {
-    const today = new Date().toISOString().split('T')[0];
-    setIncidentDate(today);
-    setTodayStr(today);
-  }, []);
   const [amountDisputed, setAmountDisputed] = useState('');
   const [recipientCategory, setRecipientCategory] =
     useState<ComplaintDraft['recipientCategory']>('Company Grievance Cell');
+
+  // Document Intelligence (Sarvam Vision) Upload States
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isAnalyzingDoc, setIsAnalyzingDoc] = useState(false);
+  const [docAnalysisResult, setDocAnalysisResult] = useState<any | null>(null);
+  const [docUploadError, setDocUploadError] = useState<string | null>(null);
+  const [isTransferred, setIsTransferred] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
@@ -49,6 +56,9 @@ export default function ComplaintsPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   useEffect(() => {
+    const today = new Date().toISOString().split('T')[0];
+    setIncidentDate(today);
+    setTodayStr(today);
     refreshDrafts();
   }, []);
 
@@ -58,6 +68,60 @@ export default function ComplaintsPage() {
     if (list.length > 0 && !activeDraft) {
       setActiveDraft(list[0]);
     }
+  };
+
+  // Handle Document Upload & Analysis via Sarvam Vision
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setSelectedFile(file);
+    setDocUploadError(null);
+    setDocAnalysisResult(null);
+    setIsTransferred(false);
+    setIsAnalyzingDoc(true);
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('language', language);
+
+    try {
+      const res = await fetch('/api/documents/analyze', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to analyze document');
+      }
+
+      setDocAnalysisResult(data);
+    } catch (err: any) {
+      console.error('Doc analysis error:', err);
+      setDocUploadError(err.message || 'Error communicating with document analysis service.');
+    } finally {
+      setIsAnalyzingDoc(false);
+    }
+  };
+
+  // Explicit user confirmation to transfer verified extracted fields into the grievance form
+  const handleConfirmAndTransfer = () => {
+    if (!docAnalysisResult?.fields) return;
+    const { platformName, amountDisputed: extAmount, incidentDate: extDate, deductionReason, orderIdOrRef } =
+      docAnalysisResult.fields;
+
+    if (platformName) setPlatformOrEmployer(platformName);
+    if (extAmount) setAmountDisputed(String(extAmount));
+    if (extDate) setIncidentDate(extDate);
+
+    // Build or enrich the problem description
+    const refText = orderIdOrRef ? ` (Ref/Order ID: #${orderIdOrRef})` : '';
+    const reasonText = deductionReason ? ` for alleged "${deductionReason}"` : '';
+    const autoSummary = `Unfair deduction of ₹${extAmount || 'disputed amount'}${reasonText}${refText}. As seen on my payout statement, this was deducted without prior notice or fair opportunity to be heard.`;
+
+    setDescription((prev) => (prev ? `${prev}\n\n[Document Evidence]: ${autoSummary}` : autoSummary));
+    setIsTransferred(true);
   };
 
   const handleGenerate = async (e: React.FormEvent) => {
@@ -154,6 +218,154 @@ export default function ComplaintsPage() {
         </p>
       </div>
 
+      {/* Feature 2: Sarvam Document Intelligence Card */}
+      <div className="rounded-2xl bg-[#0f172a] border border-sky-500/30 p-6 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          <div className="flex items-center gap-2">
+            <Upload className="w-5 h-5 text-sky-400" />
+            <h2 className="text-base font-bold text-white">
+              AI Document Intelligence (Deduction Screenshot / Statement OCR)
+            </h2>
+          </div>
+          <span className="text-[11px] font-bold text-sky-400 bg-sky-500/10 border border-sky-500/30 px-2.5 py-0.5 rounded-full self-start sm:self-auto">
+            Powered by Sarvam Vision
+          </span>
+        </div>
+
+        <p className="text-xs text-slate-300 leading-relaxed">
+          Upload a screenshot of your app deduction, penalty SMS, or weekly settlement slip (PNG, JPEG, PDF up to 10MB).
+          Sarvam Vision will extract the candidate dates, amounts, and platform details. You can review, edit, or reject the extracted facts before sending them to the complaint generator.
+        </p>
+
+        {/* Upload Input Area */}
+        <div className="flex flex-col sm:flex-row items-center gap-3">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileUpload}
+            accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf"
+            className="hidden"
+          />
+
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isAnalyzingDoc}
+            className="px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 text-white font-bold text-xs shadow-md transition-all flex items-center gap-2"
+          >
+            {isAnalyzingDoc ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>Analyzing via Sarvam Vision...</span>
+              </>
+            ) : (
+              <>
+                <Upload className="w-4 h-4" />
+                <span>Upload Statement / Screenshot</span>
+              </>
+            )}
+          </button>
+
+          {selectedFile && (
+            <span className="text-xs text-slate-400 font-mono truncate max-w-xs">
+              Selected: {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)
+            </span>
+          )}
+        </div>
+
+        {docUploadError && (
+          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{docUploadError}</span>
+          </div>
+        )}
+
+        {/* Extracted Document Intelligence Candidate Fields Review Box */}
+        {docAnalysisResult && (
+          <div className="p-4 rounded-xl bg-slate-900/90 border border-sky-500/40 space-y-3 animate-fadeIn">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-sky-400 uppercase tracking-wider flex items-center gap-1.5">
+                <FileCheck2 className="w-4 h-4" />
+                <span>Extracted Document Facts (Review & Correct)</span>
+              </span>
+              <span className="text-[10px] text-slate-400">
+                Facts extracted from uploaded file: {docAnalysisResult.filename}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div className="bg-slate-800/80 p-2.5 rounded-lg border border-slate-700">
+                <span className="text-[10px] text-slate-400 font-bold block">Detected Platform</span>
+                <span className="font-semibold text-white">
+                  {docAnalysisResult.fields.platformName || 'Not detected'}
+                </span>
+              </div>
+
+              <div className="bg-slate-800/80 p-2.5 rounded-lg border border-slate-700">
+                <span className="text-[10px] text-slate-400 font-bold block">Disputed Amount</span>
+                <span className="font-bold text-rose-400">
+                  {docAnalysisResult.fields.amountDisputed ? `₹${docAnalysisResult.fields.amountDisputed}` : 'Not detected'}
+                </span>
+              </div>
+
+              <div className="bg-slate-800/80 p-2.5 rounded-lg border border-slate-700">
+                <span className="text-[10px] text-slate-400 font-bold block">Reference Date</span>
+                <span className="font-semibold text-white">
+                  {docAnalysisResult.fields.incidentDate || 'Not detected'}
+                </span>
+              </div>
+
+              <div className="bg-slate-800/80 p-2.5 rounded-lg border border-slate-700">
+                <span className="text-[10px] text-slate-400 font-bold block">Order / Ref ID</span>
+                <span className="font-semibold text-white">
+                  {docAnalysisResult.fields.orderIdOrRef || 'None'}
+                </span>
+              </div>
+            </div>
+
+            {/* Confidence & Supporting notes */}
+            {docAnalysisResult.confidenceNotes?.length > 0 && (
+              <div className="text-[11px] text-slate-400 space-y-0.5">
+                <span className="font-semibold text-slate-300">Extraction Observations:</span>
+                <ul className="list-disc list-inside text-slate-400 pl-1">
+                  {docAnalysisResult.confidenceNotes.map((note: string, idx: number) => (
+                    <li key={idx}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-1 border-t border-slate-800">
+              <p className="text-[11px] text-amber-300/80">
+                * Note: Extracting facts does not constitute a legal determination of unlawfulness.
+              </p>
+              <button
+                type="button"
+                onClick={handleConfirmAndTransfer}
+                disabled={isTransferred}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  isTransferred
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 cursor-default'
+                    : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md shadow-emerald-500/20'
+                }`}
+              >
+                {isTransferred ? (
+                  <>
+                    <CheckCircle className="w-4 h-4" />
+                    <span>Transferred to Form</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Confirm & Fill Form</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Generation Form */}
       <div className="rounded-2xl bg-[#0f172a] border border-slate-800 p-6 shadow-xl space-y-4">
         <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -166,9 +378,6 @@ export default function ComplaintsPage() {
             <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div className="flex-1">
               <span className="font-bold">Notice:</span> {errorNotice}
-              <p className="mt-1 text-[11px] text-amber-400/80">
-                To activate live OpenAI model letter generation, configure <code className="bg-slate-900 px-1 py-0.5 rounded text-amber-200">OPENAI_API_KEY</code> in your <code className="bg-slate-900 px-1 py-0.5 rounded text-amber-200">.env.local</code>.
-              </p>
             </div>
           </div>
         )}

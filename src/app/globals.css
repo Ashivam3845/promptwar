@@ -131,7 +131,7 @@ html.light .text-rose-400 {
   color: #be123c !important;
 }
 
-/* Borders */
+/* Borders & Dividers */
 html.light .border-slate-800,
 html.light .border-slate-800\/60,
 html.light .border-slate-800\/80,
@@ -142,6 +142,35 @@ html.light .border-slate-700 {
 html.light .divide-slate-800\/80 > :not([hidden]) ~ :not([hidden]),
 html.light .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
   border-color: #e2e8f0 !important;
+}
+
+/* Badges & Pills */
+html.light .bg-emerald-500\/10,
+html.light .bg-emerald-500\/20 {
+  background-color: #d1fae5 !important;
+  color: #065f46 !important;
+  border-color: #a7f3d0 !important;
+}
+
+html.light .bg-rose-500\/10,
+html.light .bg-rose-500\/20 {
+  background-color: #ffe4e6 !important;
+  color: #9f1239 !important;
+  border-color: #fecdd3 !important;
+}
+
+html.light .bg-sky-500\/10,
+html.light .bg-sky-500\/20 {
+  background-color: #e0f2fe !important;
+  color: #0369a1 !important;
+  border-color: #bae6fd !important;
+}
+
+html.light .bg-amber-500\/10,
+html.light .bg-amber-500\/20 {
+  background-color: #fef3c7 !important;
+  color: #92400e !important;
+  border-color: #fde68a !important;
 }
 
 /* Primary Hero Banner in Light Mode */

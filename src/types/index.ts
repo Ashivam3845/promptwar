@@ -4,6 +4,8 @@ export type SupportedLanguage = 'en' | 'hi' | 'pa';
 
 export type UserRole = 'worker' | 'admin';
 
+export type WorkType = 'delivery' | 'driver' | 'daily_wage' | 'other';
+
 export interface UserProfile {
   id: string;
   email: string;
@@ -12,9 +14,17 @@ export interface UserProfile {
   role: UserRole;
   primaryPlatform: string;
   city: string;
+  state?: string;
+  workType?: WorkType;
   preferredLanguage: SupportedLanguage;
+  onboarded?: boolean;
   createdAt: string;
 }
+
+// Editable profile fields collected during onboarding and in Settings.
+export type ProfileUpdate = Partial<
+  Pick<UserProfile, 'fullName' | 'phoneNumber' | 'primaryPlatform' | 'city' | 'state' | 'workType' | 'preferredLanguage' | 'onboarded'>
+>;
 
 export interface EarningsRecord {
   id: string;

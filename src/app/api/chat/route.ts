@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getOpenAIClient, defaultModel, isOpenAIConfigured } from '@/lib/openai';
+import {
+  getOpenAIClient,
+  defaultOpenAiModel,
+  isOpenAIConfigured,
+  isGeminiConfigured,
+  callGeminiGenerate,
+} from '@/lib/openai';
 import { VERIFIED_SCHEMES } from '@/lib/schemes';
-
 
 export async function POST(req: NextRequest) {
   try {
@@ -24,21 +29,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!isOpenAIConfigured) {
+    if (!isOpenAIConfigured && !isGeminiConfigured) {
       return NextResponse.json(
         {
-          error: 'OPENAI_API_KEY is not configured on the server. Please set OPENAI_API_KEY in .env.local to enable live AI responses.',
-          isConfigError: true
+          error: 'No active AI key configured on the server. Please set OPENAI_API_KEY or GEMINI_API_KEY in .env.',
+          isConfigError: true,
         },
         { status: 503 }
-      );
-    }
-
-    const openai = getOpenAIClient();
-    if (!openai) {
-      return NextResponse.json(
-        { error: 'OpenAI client failed to initialize.' },
-        { status: 500 }
       );
     }
 
@@ -51,7 +48,7 @@ export async function POST(req: NextRequest) {
       eligibility: s.eligibilityCriteria,
       exclusions: s.relevantExclusions,
       steps: s.applicationSteps,
-      summary: s.summary
+      summary: s.summary,
     }));
 
     const langInstruction =
@@ -72,22 +69,52 @@ ${JSON.stringify(verifiedSchemesContext, null, 2)}
 5. If the user asks about something outside verified facts or uncertain platform internal policies, explicitly state uncertainty and suggest contacting the official platform grievance desk or National Consumer Helpline (NCH 1915).
 6. Always acknowledge the worker's effort and stress with dignity and empathy.`;
 
-    const formattedMessages = [
-      { role: 'system' as const, content: systemPrompt },
-      ...messages.slice(-8).map((m: { role: string; content: string }) => ({
-        role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-        content: String(m.content),
-      })),
-    ];
+    let reply = '';
+    let modelUsed = '';
 
-    const completion = await openai.chat.completions.create({
-      model: defaultModel,
-      messages: formattedMessages,
-      temperature: 0.4,
-      max_tokens: 800,
-    });
+    // Primary: Try OpenAI if configured
+    let openaiFailed = false;
+    if (isOpenAIConfigured) {
+      try {
+        const openai = getOpenAIClient();
+        if (openai) {
+          const formattedMessages = [
+            { role: 'system' as const, content: systemPrompt },
+            ...messages.slice(-8).map((m: { role: string; content: string }) => ({
+              role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+              content: String(m.content),
+            })),
+          ];
 
-    const reply = completion.choices[0]?.message?.content || '';
+          const completion = await openai.chat.completions.create({
+            model: defaultOpenAiModel,
+            messages: formattedMessages,
+            temperature: 0.4,
+            max_tokens: 800,
+          });
+
+          reply = completion.choices[0]?.message?.content || '';
+          modelUsed = defaultOpenAiModel;
+        }
+      } catch (openAiErr: any) {
+        console.warn('OpenAI request failed, falling back to Gemini:', openAiErr.message);
+        openaiFailed = true;
+      }
+    }
+
+    // Secondary / Fallback: Gemini 3.8 Flash
+    if ((!isOpenAIConfigured || openaiFailed || !reply) && isGeminiConfigured) {
+      const contents = messages.slice(-8).map((m: { role: string; content: string }) => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: String(m.content) }],
+      }));
+
+      reply = await callGeminiGenerate({
+        contents,
+        systemInstruction: systemPrompt,
+      });
+      modelUsed = 'gemini-3.8-flash';
+    }
 
     // Match any referenced schemes to return structured source links
     const referencedSources: { name: string; url: string }[] = [];
@@ -106,11 +133,11 @@ ${JSON.stringify(verifiedSchemesContext, null, 2)}
     return NextResponse.json({
       reply,
       sources: referencedSources,
-      modelUsed: defaultModel,
+      modelUsed,
     });
   } catch (error: any) {
     console.error('Error in /api/chat:', error);
-    const errorMessage = error?.message || 'Upstream OpenAI service failure';
+    const errorMessage = error?.message || 'Upstream AI service failure';
     const status = error?.status || 500;
     return NextResponse.json(
       { error: `AI Assistant Error: ${errorMessage}` },

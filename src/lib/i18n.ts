@@ -1,7 +1,8 @@
-import { SupportedLanguage } from '@/types';
+import { journeyStrings } from './i18n-journey';
 
 export const translations = {
   en: {
+    ...journeyStrings.en,
     appName: 'GigSaathi AI',
     appTagline: 'Multilingual AI companion for gig & informal workers in India',
     nav: {
@@ -132,6 +133,7 @@ export const translations = {
     }
   },
   hi: {
+    ...journeyStrings.hi,
     appName: 'गिग साथी AI',
     appTagline: 'भारत के गिग और असंगठित कामगारों के लिए बहुभाषी AI साथी',
     nav: {
@@ -262,6 +264,7 @@ export const translations = {
     }
   },
   pa: {
+    ...journeyStrings.pa,
     appName: 'ਗਿੱਗ ਸਾਥੀ AI',
     appTagline: 'ਭਾਰਤ ਦੇ ਗਿੱਗ ਅਤੇ ਦਿਹਾੜੀਦਾਰ ਕਾਮਿਆਂ ਲਈ ਬਹੁਭਾਸ਼ਾਈ AI ਸਾਥੀ',
     nav: {
