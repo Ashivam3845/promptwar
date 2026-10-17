@@ -197,6 +197,15 @@ export const VERIFIED_SCHEMES: WelfareScheme[] = [
   }
 ];
 
+// Lower-cased search text per scheme, built once instead of on every keystroke.
+const SEARCH_INDEX = new Map(
+  VERIFIED_SCHEMES.map((s) => [
+    s.id,
+    // Fields are joined with a separator that cannot appear in a typed query.
+    [s.name, s.category, s.summary.en, s.summary.hi, s.summary.pa, ...s.eligibilityCriteria].join('\u0000').toLowerCase(),
+  ])
+);
+
 export function searchSchemes(query?: string, jurisdiction?: string): WelfareScheme[] {
   let results = VERIFIED_SCHEMES;
 
@@ -206,17 +215,9 @@ export function searchSchemes(query?: string, jurisdiction?: string): WelfareSch
     );
   }
 
-  if (query && query.trim()) {
-    const q = query.toLowerCase().trim();
-    results = results.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        s.category.toLowerCase().includes(q) ||
-        s.summary.en.toLowerCase().includes(q) ||
-        s.summary.hi.toLowerCase().includes(q) ||
-        s.summary.pa.toLowerCase().includes(q) ||
-        s.eligibilityCriteria.some((c) => c.toLowerCase().includes(q))
-    );
+  const q = query?.toLowerCase().trim();
+  if (q) {
+    results = results.filter((s) => SEARCH_INDEX.get(s.id)!.includes(q));
   }
 
   return results;

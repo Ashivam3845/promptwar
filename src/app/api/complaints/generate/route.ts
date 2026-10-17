@@ -159,6 +159,8 @@ export async function POST(req: NextRequest) {
           ],
           response_format: { type: 'json_object' },
           temperature: 0.3,
+          // A full letter plus lists fits comfortably; caps cost and latency on runaway output.
+          max_tokens: 1500,
         });
         rawContent = response.choices[0]?.message?.content || '';
       } catch (err: unknown) {

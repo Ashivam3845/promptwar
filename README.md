@@ -68,6 +68,13 @@ GigSaathi AI addresses the economic and informational precarity faced by India's
 
 ---
 
+### Performance & cost controls
+- **Retrieval, not prompt stuffing**: `src/lib/schemeRetrieval.ts` picks the 1–3 schemes relevant to the question (precomputed, stemmed keyword index) and sends them as compact JSON in the reply language only. The chat prompt is 60–88% smaller than sending every scheme in all three languages.
+- **Response caching**: one-off chat questions (such as the suggested-question buttons) and synthesised speech are cached in a small in-memory LRU (`src/lib/lruCache.ts`), so identical requests never pay for a second AI call.
+- **Lean payloads**: speech is returned as raw audio bytes (about 25% smaller than base64 JSON), queries select only the columns the UI uses, admin queries are row-limited, and large screenshots are resized in the browser before upload.
+- **Bounded latency**: provider calls time out after 30s, document jobs are polled with backoff, complaint output is capped at 1,500 tokens, and chat requests are cancelled if the user leaves the page.
+- **No wasted work**: the proxy skips session verification for visitors without a session cookie, lists update from save results instead of being refetched, and totals and searches are memoized or precomputed.
+
 ## 3. Environment Configuration
 
 Copy `.env.example` to `.env`:

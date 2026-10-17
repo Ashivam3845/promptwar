@@ -11,7 +11,9 @@ const SARVAM_BASE_URL = 'https://api.sarvam.ai';
 const STT_TIMEOUT_MS = 25_000;
 const TTS_TIMEOUT_MS = 20_000;
 const DOC_REQUEST_TIMEOUT_MS = 30_000;
-const DOC_POLL_INTERVAL_MS = 2_000;
+// Poll quickly at first (small screenshots finish fast), then back off to avoid hammering the API.
+const DOC_POLL_INITIAL_MS = 500;
+const DOC_POLL_MAX_INTERVAL_MS = 3_000;
 const DOC_POLL_MAX_TOTAL_MS = 30_000;
 
 /** Longest text sent for speech synthesis in one request. */
@@ -254,8 +256,10 @@ export async function analyzeDocumentWithSarvam(
   // Step 2: Poll status, bounded by total elapsed time
   let extractedRawText = '';
   const deadline = Date.now() + DOC_POLL_MAX_TOTAL_MS;
+  let pollDelay = DOC_POLL_INITIAL_MS;
   while (Date.now() < deadline) {
-    await new Promise((res) => setTimeout(res, DOC_POLL_INTERVAL_MS));
+    await new Promise((res) => setTimeout(res, pollDelay));
+    pollDelay = Math.min(pollDelay * 1.5, DOC_POLL_MAX_INTERVAL_MS);
 
     const remainingMs = Math.max(1, deadline - Date.now());
     let statusRes: Response;

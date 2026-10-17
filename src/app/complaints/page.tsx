@@ -6,6 +6,7 @@ import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { ComplaintDraft, DocumentAnalysisResult } from '@/types';
 import { stashPendingDraft, takePendingDraft } from '@/lib/pendingDraft';
+import { compressImageForUpload } from '@/lib/imageCompression';
 import {
   FileText,
   Sparkles,
@@ -89,7 +90,7 @@ export default function ComplaintsPage() {
     setIsAnalyzingDoc(true);
 
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', await compressImageForUpload(file));
     formData.append('language', language);
 
     try {

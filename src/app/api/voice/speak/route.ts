@@ -1,5 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { convertTextToSpeechWithSarvam, isSarvamConfigured, normalizeLanguage, MAX_TTS_CHARS } from '@/lib/sarvam';
+import { LruCache } from '@/lib/lruCache';
+
+// The same answer (e.g. a cached chat reply) is often played by many users: synthesise it once.
+const speechCache = new LruCache<{ audio: Uint8Array; contentType: string }>(50, 24 * 60 * 60 * 1000);
+
+// Raw audio bytes are ~25% smaller than base64-in-JSON and need no decoding on the client.
+function audioResponse(audio: Uint8Array, contentType: string, cacheStatus: 'HIT' | 'MISS') {
+  return new Response(new Blob([audio as BlobPart], { type: contentType }), {
+    headers: {
+      'Content-Type': contentType,
+      'Cache-Control': 'private, max-age=86400',
+      'X-Speech-Cache': cacheStatus,
+    },
+  });
+}
 
 export async function POST(req: NextRequest) {
   if (!isSarvamConfigured()) {
@@ -36,13 +51,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const cacheKey = `${language}:${text.trim()}`;
+  const cached = speechCache.get(cacheKey);
+  if (cached) {
+    return audioResponse(cached.audio, cached.contentType, 'HIT');
+  }
+
   try {
     const result = await convertTextToSpeechWithSarvam(text, language);
-    return NextResponse.json({
-      audioBase64: result.audioBase64,
-      contentType: result.contentType,
-      language,
-    });
+    const audio = new Uint8Array(Buffer.from(result.audioBase64, 'base64'));
+    speechCache.set(cacheKey, { audio, contentType: result.contentType });
+    return audioResponse(audio, result.contentType, 'MISS');
   } catch (error: unknown) {
     console.error('Error in /api/voice/speak:', error);
     return NextResponse.json(

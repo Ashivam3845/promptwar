@@ -148,9 +148,12 @@ export default function AssistantPage() {
     setInput('');
     setLoading(true);
 
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
@@ -174,10 +177,11 @@ export default function AssistantPage() {
 
       setMessages((prev) => [...prev, botMessage]);
     } catch (err) {
+      if (controller.signal.aborted) return; // left the page: nothing to show
       console.error('Chat error:', err);
       setErrorNotice((err instanceof Error && err.message) || 'Network error or OpenAI API unavailable.');
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   };
 
@@ -186,8 +190,19 @@ export default function AssistantPage() {
   // Generated speech per `${language}:${messageId}`, kept for this visit only.
   const ttsCacheRef = useRef(new Map<string, string>());
 
-  // Stop any playing answer when leaving the page.
-  useEffect(() => () => currentAudioRef.current?.pause(), []);
+  // In-flight chat request, cancelled if the user leaves the page.
+  const chatAbortRef = useRef<AbortController | null>(null);
+
+  // Stop any playing answer, cancel pending requests and release cached audio when leaving.
+  useEffect(() => {
+    const cache = ttsCacheRef.current;
+    return () => {
+      chatAbortRef.current?.abort();
+      currentAudioRef.current?.pause();
+      cache.forEach((url) => URL.revokeObjectURL(url));
+      cache.clear();
+    };
+  }, []);
 
   const playAudio = async (audioSrc: string, messageId: string) => {
     const audio = new Audio(audioSrc);
@@ -250,16 +265,15 @@ export default function AssistantPage() {
         }),
       });
 
-      const data = await response.json();
       if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to convert text to speech');
       }
 
-      if (data.audioBase64) {
-        const audioSrc = `data:${data.contentType || 'audio/wav'};base64,${data.audioBase64}`;
-        ttsCacheRef.current.set(cacheKey, audioSrc);
-        await playAudio(audioSrc, messageId);
-      }
+      // The API returns raw audio; play it from an object URL (freed when leaving the page).
+      const audioSrc = URL.createObjectURL(await response.blob());
+      ttsCacheRef.current.set(cacheKey, audioSrc);
+      await playAudio(audioSrc, messageId);
     } catch (err) {
       console.error('TTS error:', err);
       setErrorNotice((err instanceof Error && err.message) || 'Failed to generate voice speech.');
